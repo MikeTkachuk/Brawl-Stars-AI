@@ -25,8 +25,9 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 while True:
     start = time.time()
     region = grab_screen([60,35,400,170])
-    region = cv.resize(region, (224,224))
-    print(vit.forward_features(img_to_tensor(region)))
+    cv.imwrite('imt.png',region)
+    region1 = cv.resize(region, (224,224))
+    print(vit.forward_features(img_to_tensor(region1)))
     score = grab_screen([120, 170, 200, 230])
     region = cv.cvtColor(region, cv.COLOR_RGB2GRAY)
     score = cv.cvtColor(score, cv.COLOR_RGB2GRAY)
@@ -37,7 +38,6 @@ while True:
     region = cv.cvtColor(np.expand_dims(region,-1), cv.COLOR_GRAY2RGB)
     score = cv.cvtColor(np.expand_dims(score,-1), cv.COLOR_GRAY2RGB)
 
-    region = cv.resize(region, (224,224))
     score = cv.resize(score, None, fx=3., fy=3.)
 
     print(pytesseract.image_to_string(region, config='--psm 8'))
