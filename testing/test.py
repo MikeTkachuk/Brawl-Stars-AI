@@ -17,7 +17,7 @@ def img_to_tensor(img):
     return img
 
 
-vit_dict = torch.load(r"C:\Users\Mykhailo_Tkachuk\Downloads\mae_pretrain_vit_base.pth")
+vit_dict = torch.load(r"mae_pretrain_vit_base.pth")
 vit = vit_base_patch16()
 print(vit.load_state_dict(vit_dict['model'], strict=False))
 
@@ -25,7 +25,7 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 while True:
     start = time.time()
     region = grab_screen([60,35,400,170])
-    cv.imwrite('imt.png',region)
+    cv.imwrite('../imt.png', region)
     region1 = cv.resize(region, (224,224))
     print(vit.forward_features(img_to_tensor(region1)))
     score = grab_screen([120, 170, 200, 230])
@@ -45,5 +45,5 @@ while True:
 
 
     print(f'FPS: {1/(time.time()-start)}')
-    cv.imwrite('img1.png', region)
-    cv.imwrite('score1.png', score)
+    cv.imwrite('../img1.png', region)
+    cv.imwrite('../score1.png', score)

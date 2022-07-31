@@ -20,16 +20,32 @@ gadget = hex(33)
 # ===============
 
 # --- main screen absolute size ---
-main_screen = (0, 41, 1388, 822)    # absolute. Should be changed in case of main screen displacement
+main_screen = (0, 41, 1388, 822)  # absolute. Should be changed in case of main screen displacement
 
 ref_main_screen = (0, 41, 1388, 822)  # to fix the relative calculations. Should not be changed
+screen_x, screen_y = ref_main_screen[0], ref_main_screen[1]
 screen_width, screen_height = ref_main_screen[2], ref_main_screen[3]
 
-# --- helper controls relative to main screen ---
-end_screen_title = (60 / screen_width, 0 / screen_height,
-                    340 / screen_width, 135 / screen_height)
-score_region = (120 / screen_width, 170 / screen_height,
-                80 / screen_width, 60 / screen_height)
 
-exit_end_screen = (1224 / screen_width, 763 / screen_height)
-start_battle = (1192 / screen_width, 742 / screen_height)
+# --- helper controls relative to main screen ---
+def to_relative(region):
+    if len(region) == 2:
+        return (
+            (region[0] - screen_x) / screen_width,
+            (region[1] - screen_y) / screen_height,
+        )
+    if len(region) == 4:
+        return (
+            (region[0] - screen_x) / screen_width,
+            (region[1] - screen_y) / screen_height,
+            region[2] / screen_width,
+            region[3] / screen_height,
+        )
+
+
+end_screen_title = to_relative((55, 41, 340, 135))
+score_region = to_relative((115,170,80,60))
+player_trophies_region = to_relative((620, 143, 103, 40))
+
+exit_end_screen = to_relative((1224, 763))
+start_battle = to_relative((1192, 742))
