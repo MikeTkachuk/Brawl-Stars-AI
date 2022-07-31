@@ -1,4 +1,9 @@
 # ===============
+# paths
+# ===============
+tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract'
+
+# ===============
 # controls config
 # ===============
 forward = hex(17)
@@ -15,8 +20,10 @@ gadget = hex(33)
 # ===============
 
 # --- main screen absolute size ---
-main_screen = (0, 41, 1388, 822)  # absolute
-screen_width, screen_height = main_screen[2], main_screen[3]
+main_screen = (0, 41, 1388, 822)    # absolute. Should be changed in case of main screen displacement
+
+ref_main_screen = (0, 41, 1388, 822)  # to fix the relative calculations. Should not be changed
+screen_width, screen_height = ref_main_screen[2], ref_main_screen[3]
 
 # --- helper controls relative to main screen ---
 end_screen_title = (60 / screen_width, 0 / screen_height,
