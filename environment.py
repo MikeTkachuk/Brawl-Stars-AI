@@ -49,6 +49,7 @@ class ScreenEnv:
         :param screen: HxWxC RGB array of a screen
         :return:
         """
+        # TODO do gram screen once
         def _ocr_preproc(rgb_region):
             if min(rgb_region.shape[:2]) < 240:
                 scale = 240/min(rgb_region.shape[:2])
