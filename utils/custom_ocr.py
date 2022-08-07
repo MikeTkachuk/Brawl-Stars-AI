@@ -9,6 +9,8 @@ def _parse_sample(img, crop=True):
     # TODO maybe blur for robustness?
     if crop:
         img = img[:, img.shape[1] * 3 // 32:img.shape[1] * 9 // 16]  # crop
+    # experimental
+    img = cv.blur(img, (5,5))
     cnt, hierarchy = cv.findContours(img, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
     return img, cnt
 
@@ -64,9 +66,9 @@ def match(inp, db, crop=False, score_thresh=0.15):
             if db[ch]['skew'] != 0 and c_skew != db[ch]['skew']:  # skip if skew matters and does not match
                 continue
             chars.append(ch)
-            scores.append(cv.matchShapes(c, np.array(db[ch]['cnt']).reshape((-1, 1, 2)), cv.CONTOURS_MATCH_I1, 0.0))
+            scores.append(cv.matchShapes(c, np.array(db[ch]['cnt']).reshape((-1, 1, 2)), cv.CONTOURS_MATCH_I3, 0.0))
         min_id = np.argmin(scores)
-        print(dict(zip(chars, scores)))
+        # print(dict(zip(chars, scores)))
         if scores[min_id] < score_thresh:
             out += chars[min_id]
     return out
@@ -86,4 +88,4 @@ for file in _get_filenames('../digits/test'):
     gt = list(os.path.split(file)[-1].split('.')[0])
     img = cv.imread(file)
     img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-    print(''.join(gt), match(img,database, score_thresh=0.15))
+    print(''.join(gt), match(img,database, score_thresh=0.11))
