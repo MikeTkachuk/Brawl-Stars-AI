@@ -2,6 +2,10 @@
 # paths
 # ===============
 tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract'
+digit_database = r'C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\digits'
+digit_signed_database = r'C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\digits_signed'
+exit_database = r'C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\exit'
+play_database = r'C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\play'
 
 # ===============
 # controls config
@@ -22,7 +26,7 @@ gadget = hex(33)
 # --- main screen absolute size ---
 main_screen = (0, 41, 1388, 822)  # absolute. Should be changed in case of main screen displacement
 
-ref_main_screen = (0, 41, 1388, 822)  # to fix the relative calculations. Should not be changed
+ref_main_screen = (0, 41, 1388, 822)  # to fix the relative calculations. Should NOT be changed!
 screen_x, screen_y = ref_main_screen[0], ref_main_screen[1]
 screen_width, screen_height = ref_main_screen[2], ref_main_screen[3]
 
@@ -43,9 +47,9 @@ def to_relative(region):
         )
 
 
-end_screen_title = to_relative((55, 41, 340, 135))
+end_screen_title_region = to_relative((55, 41, 360, 135))
 score_region = to_relative((115,170,80,60))
 player_trophies_region = to_relative((620, 143, 103, 40))
 
-exit_end_screen = to_relative((1224, 763))
-start_battle = to_relative((1192, 742))
+exit_end_screen_region = to_relative((1140, 720, 120, 50))
+start_battle_region = to_relative((1185, 740, 80, 40))
