@@ -26,8 +26,8 @@ class ScreenEnv:
 
         # init ocr
         pytesseract.pytesseract.tesseract_cmd = config.tesseract_cmd
-        self.digit_database = save_templates(config.digit_database)
-        self.digit_signed_database = save_templates(config.digit_signed_database)
+        self.digit_database = save_templates(config.digit_database, crop=(3 / 32, 9 / 16))
+        self.digit_signed_database = save_templates(config.digit_signed_database, crop=(3 / 32, 9 / 16))
         self.exit_database = save_templates(config.exit_database)
         self.play_database = save_templates(config.play_database)
 
@@ -57,7 +57,7 @@ class ScreenEnv:
         :return:
         """
 
-        def _ocr_preproc(rgb_screen, region):
+        def _ocr_preproc(rgb_screen, region, thresh=(150, 255), erosion=7):
             # region in xywh
             cropper = (slice(region[1], region[1] + region[3]),
                        slice(region[0], region[0] + region[2]))
@@ -67,14 +67,15 @@ class ScreenEnv:
                 scale = 240 / min(rgb_region.shape[:2])
                 rgb_region = cv.resize(rgb_region, None, fx=scale, fy=scale)
             rgb_region = cv.cvtColor(rgb_region, cv.COLOR_RGB2GRAY)
-            _, rgb_region = cv.threshold(rgb_region, 150, 255, cv.THRESH_BINARY)
-            rgb_region = cv.erode(rgb_region, np.ones((7, 7), np.uint8))
+            _, rgb_region = cv.threshold(rgb_region, thresh[0], thresh[1], cv.THRESH_BINARY)
+            rgb_region = cv.erode(rgb_region, np.ones((erosion, erosion), np.uint8))
             rgb_region = cv.cvtColor(np.expand_dims(rgb_region, -1), cv.COLOR_GRAY2RGB)
             return rgb_region
 
         exit_end_screen_region = self._relative_to_pixel(self.exit_end_screen_region)
-        exit_end_screen = _ocr_preproc(screen, exit_end_screen_region)
+        exit_end_screen = _ocr_preproc(screen, exit_end_screen_region, thresh=(200, 255))
         exit_end_screen_text = match(cv.cvtColor(exit_end_screen, cv.COLOR_RGB2GRAY), self.exit_database)
+        # cv.imwrite('exit.png', exit_end_screen)
         if exit_end_screen_text == 'exit':  # run slow tesseract only if inside exit screen
             end_title_region = self._relative_to_pixel(self.end_screen_title_region)
             end_title = _ocr_preproc(screen, end_title_region)
@@ -86,13 +87,15 @@ class ScreenEnv:
             score_region = self._relative_to_pixel(self.score_region)
             score = _ocr_preproc(screen, score_region)
             score_text = match(cv.cvtColor(score, cv.COLOR_RGB2GRAY), self.digit_signed_database)
+            # cv.imwrite('+8.png', score)
         else:
             end_title_text = ''
             score_text = ''
 
         start_battle_region = self._relative_to_pixel(self.start_battle_region)
-        start_battle = _ocr_preproc(screen, start_battle_region)
+        start_battle = _ocr_preproc(screen, start_battle_region, thresh=(200, 255))
         start_battle_text = match(cv.cvtColor(start_battle, cv.COLOR_RGB2GRAY), self.play_database)
+        # cv.imwrite('play.png', start_battle)
         if start_battle_text == 'play':  # read brawler total trophies only in the main menu
             player_trophies_region = self._relative_to_pixel(self.player_trophies_region)
             player_trophies = _ocr_preproc(screen, player_trophies_region)
@@ -100,7 +103,8 @@ class ScreenEnv:
         else:
             player_trophies_text = ''
 
-        return end_title_text, score_text, player_trophies_text
+        return end_title_text, score_text, player_trophies_text, \
+            exit_end_screen_text == 'exit', start_battle_text == 'play'
 
     def get_state(self):
         """
@@ -108,9 +112,7 @@ class ScreenEnv:
         :return: HxWxC RGB array, float reward, bool is_training
         """
         screen = grab_screen(self.main_screen)
-        end_title_text, score_text, player_trophies = self._parse_end_screen(screen)
+        end_title_text, score_text, player_trophies, is_end_screen, is_main_menu = self._parse_end_screen(screen)
         print(f"End:{end_title_text}")
         print(f"Reward:{score_text}")
         print(f"Total:{player_trophies}")
-
-
