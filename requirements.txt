@@ -1,2 +1,5 @@
 pytesseract
 pyefd
+gym
+numpy
+opencv-python

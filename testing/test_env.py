@@ -1,7 +1,7 @@
-from environment import ScreenEnv
+from environment import ScreenParser
 import time
 
-env = ScreenEnv()
+env = ScreenParser()
 
 count = 0
 while True:

@@ -1,6 +1,6 @@
 from utils.getkeys import key_check
 from controls import act
-from environment import ScreenEnv
+from environment import ScreenParser
 from model import
 from training import
 import config
@@ -19,7 +19,7 @@ A TODO list:
 - run dummy model
 """
 
-env = ScreenEnv()
+env = ScreenParser()
 def run_loop():
     paused = False
 
