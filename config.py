@@ -12,12 +12,12 @@ proceed_database = r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\oc
 # ===============
 # controls config
 # ===============
-forward = hex(17)
-backward = hex(31)
-left = hex(30)
-right = hex(32)
+forward = 17
+backward = 31
+left = 30
+right = 32
 
-gadget = hex(33)
+gadget = 33
 
 # ===============
 # screen locations config

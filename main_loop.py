@@ -1,10 +1,13 @@
+import numpy as np
+
 from utils.getkeys import key_check
 from controls import act
-from environment import ScreenParser
-from model import
-from training import
+from environment import ScreenParser, GymEnv
+from model import *
+from training import *
 import config
 
+import time
 
 """
 A TODO list:
@@ -19,15 +22,35 @@ A TODO list:
 - run dummy model
 """
 
-env = ScreenParser()
-def run_loop():
-    paused = False
+parser = ScreenParser()
+env = GymEnv(parser=parser)
 
+
+def run_loop():
+    env.reset()
+
+    paused = True
+    angle_ = 0
     while True:
         if not paused:
-
+            print(angle_)
+            direction = np.array([np.cos(angle_), np.sin(angle_)])
+            env.step({
+                'direction': direction,
+                'make_move': 1,
+            })
+            angle_ += 0.3
+            time.sleep(0.2)
 
         if 'Z' in key_check():
             paused = not paused
+            env.step({
+                'direction': [0, 1],
+                'make_move': 0,
+            })
         if 'Q' in key_check():
             break
+
+
+if __name__ == '__main__':
+    run_loop()

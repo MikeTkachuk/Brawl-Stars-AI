@@ -5,10 +5,14 @@ import config
 import pytesseract
 import os
 from utils.custom_ocr import save_templates, match
+from controls import act
 
 import gym
 from gym import spaces
 from typing import Optional, Union, List
+from multiprocessing import Process
+from multiprocessing.sharedctypes import Value
+from ctypes import Structure, c_double
 
 
 def _ocr_preproc(rgb_screen, region, thresh=(150, 255), erosion=7):
@@ -125,19 +129,77 @@ class ScreenParser:
         :return: HxWxC RGB array, float reward, bool is_training
         """
         screen = grab_screen(self.main_screen)
+        parse_results = self._parse_screen(screen)
+
         (end_title_text, score_text, player_trophies,
-         exit_text, play_text, defeated_text, proceed_text) = self._parse_screen(screen)
+         exit_text, play_text, defeated_text, proceed_text) = parse_results
 
         print(end_title_text, score_text, player_trophies,
               exit_text, play_text, defeated_text, proceed_text)
+        return screen, parse_results
+
+
+class Vector(Structure):
+    _fields_ = [('x', c_double), ('y', c_double)]
 
 
 class GymEnv(gym.Env):
     def __init__(self, parser: ScreenParser):
         self.parser = parser
+        self.acting_process = None
+        self.action_transmitter = None
+
+    def _init_control_process(self):
+        if self.acting_process is not None:
+            self.acting_process.terminate()
+            print('Terminated latest control.')
+
+        direction = Value(Vector, 1, 0)
+        make_move = Value('i', 0)
+        make_shot = Value('i', 0)
+        shoot_direction = Value(Vector, 1, 0)
+        super_ability = Value('i', 0)
+        use_gadget = Value('i', 0)
+
+        self.acting_process = Process(target=act, args=(
+            direction,
+            make_move,
+            make_shot,
+            shoot_direction,
+            super_ability,
+            use_gadget
+        ))
+        self.acting_process.start()
+        print('New control started.')
+
+        self.action_transmitter = {
+            'direction': direction,
+            'make_move': make_move,
+            'make_shot': make_shot,
+            'shoot_direction': shoot_direction,
+            'super_ability': super_ability,
+            'use_gadget': use_gadget
+        }
+
+    def _interpret_parsed_screen(self, parsed):
+        (end_title_text, score_text, player_trophies,
+         exit_text, play_text, defeated_text, proceed_text) = parsed
 
     def step(self, action):
-        pass
+        """
+        Start an action running until the next step call. Return the screen observed at the same time
+        :param action:
+        :return:
+        """
+        for k, v in self.action_transmitter.items():
+            if k not in action:
+                continue
+            if 'direction' in k:
+                v.x = action[k][0]
+                v.y = action[k][1]
+            else:
+                v.value = action[k]
+        screen, parse_results = self.parser.get_state()
 
     def reset(
             self,
@@ -147,7 +209,11 @@ class GymEnv(gym.Env):
             options=None,
     ):
         # TODO add skip end of the showdown battle
-        pass
+        super().reset(seed=seed)
+        self._init_control_process()
+        observation = grab_screen(self.parser.main_screen)
+        info = {}
+        return (observation, info) if return_info else observation
 
     def render(self, mode="human"):
         return
