@@ -27,20 +27,24 @@ env = GymEnv(parser=parser)
 
 
 def run_loop():
-    env.reset()
+    model = get_model()
+    weights = np.random.normal(0,0.05, size=(768, 2))
+    obs = env.reset()
 
     paused = True
     angle_ = 0
     while True:
         if not paused:
-            print(angle_)
-            direction = np.array([np.cos(angle_), np.sin(angle_)])
-            env.step({
+            start_ = time.time()
+            features = model.forward_features(img_to_tensor(obs)).cpu().detach().numpy()
+
+            direction = np.dot(features, weights).flatten()
+            print(direction)
+            obs = env.step({
                 'direction': direction,
                 'make_move': 1,
             })
-            angle_ += 0.3
-            time.sleep(0.2)
+            print('elapsed: ', time.time() - start_)
 
         if 'Z' in key_check():
             paused = not paused
@@ -49,6 +53,7 @@ def run_loop():
                 'make_move': 0,
             })
         if 'Q' in key_check():
+            env.__exit__()
             break
 
 

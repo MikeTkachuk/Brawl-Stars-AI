@@ -3,6 +3,7 @@ import time
 from utils.directkeys import PressKey, ReleaseKey
 import config
 import numpy as np
+import mouse
 
 
 def straight():
@@ -97,34 +98,61 @@ def generate_dir(direction):
     return dir_control
 
 
+def shooting_routine(old, new):
+    pass
+
+
 def act(
         direction=None,
         make_move=None,
         make_shot=None,
         shoot_direction=None,
+        shoot_strength=None,
         super_ability=None,
         use_gadget=None
 ):
     """
-    Run an action until rerun with new
-    :param direction:
-    :param make_move:
-    :param make_shot:
-    :param shoot_direction:
-    :param super_ability:
-    :param use_gadget:
+    Run an action. Use shared states to change the action during the run. Runs an infinite loop
+
+    :param direction: float (x, y), movement vector, will be normalized
+    :param make_move: int bool-like, whether to move
+    :param make_shot: int bool-like, whether to release the shoot button
+    :param shoot_direction: float (x, y), aiming vector, will be normalized
+    :param shoot_strength: float [0,1], how far to throw (for throwing abilities)
+    :param super_ability: int bool-like, whether to use the super ability
+    :param use_gadget: int bool-like, whether to use a gadget
     :return:
     """
 
+    # TODO implement mouse radial movement (based on difference
+    #  in shoot_directions), clone for each of the shooting modes
+    # TODO calculate shoot_strength => pixel distance. Add to config?
+    # TODO make super <=> not super mode change via proper control release (spot if changed)
+
     # how to aim inter-frame?
     # make shot inter-frame?
+    # use throwing only when specified&
+    # multi-shot?
 
     # init act.vars
     def init():
-        pulled = _make_args_local_copy()
-        act.direction_x_local = pulled[0]
-        act.direction_y_local = pulled[1]
-        act.make_move_local = pulled[2]
+        store_old = (act.shoot_direction_x_local,
+                     act.shoot_direction_y_local,
+                     act.shoot_strength_local,
+                     act.super_ability_local,)
+        (
+            act.direction_x_local,
+            act.direction_y_local,
+            act.make_move_local,
+
+            act.make_shot_local,
+            act.shoot_direction_x_local,
+            act.shoot_direction_y_local,
+            act.shoot_strength_local,
+            act.super_ability_local,
+
+            act.use_gadget_local
+        ) = _make_args_local_copy()
 
         if not act.make_move_local:
             stop_movement()
@@ -132,31 +160,65 @@ def act(
         else:
             movements_ = generate_dir((act.direction_x_local, act.direction_y_local))
 
+        shooting_routine(store_old, (act.make_shot_local,
+            act.shoot_direction_x_local,
+            act.shoot_direction_y_local,
+            act.shoot_strength_local,
+            act.super_ability_local,))
+
+        PressKey(config.gadget)
+        ReleaseKey(config.gadget)
+
         return movements_
 
     def _make_args_local_copy():
         direction_x_local = float(direction.x)
         direction_y_local = float(direction.y)
         make_move_local = int(make_move.value)
+
+        make_shot_local = int(make_shot.value)
+        shoot_direction_x_local = float(shoot_direction.x)
+        shoot_direction_y_local = float(shoot_direction.y)
+        shoot_strength_local = float(shoot_strength.value)
+        super_ability_local = int(super_ability.value)
+
+        use_gadget_local = int(use_gadget)
         return (
             direction_x_local,
             direction_y_local,
             make_move_local,
+
+            make_shot_local,
+            shoot_direction_x_local,
+            shoot_direction_y_local,
+            shoot_strength_local,
+            super_ability_local,
+
+            use_gadget_local
+        )
+
+    def _get_local_copy():
+        return (
+            act.direction_x_local,
+            act.direction_y_local,
+            act.make_move_local,
+
+            act.make_shot_local,
+            act.shoot_direction_x_local,
+            act.shoot_direction_y_local,
+            act.shoot_strength_local,
+            act.super_ability_local,
+
+            act.use_gadget_local
         )
 
     def _spot_change():
         pulled = _make_args_local_copy()
         changed_ = [a != b for a, b in
-                    zip([act.direction_x_local, act.direction_y_local, act.make_move_local],
+                    zip(_get_local_copy(),
                         pulled)
                     ]
-        if any(changed_):
-            act.direction_x_local = pulled[0]
-            act.direction_y_local = pulled[1]
-            act.make_move_local = pulled[2]
-            return True
-        else:
-            return False
+        return any(changed_)
 
     movement_controls = init()
     while True:
@@ -168,4 +230,4 @@ def act(
         print('im here', len(movement_controls))
         for func in movement_controls:
             func()
-            time.sleep(0.15)
+            time.sleep(0.1)

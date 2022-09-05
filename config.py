@@ -61,3 +61,7 @@ exit_end_screen_region = to_relative((1185, 740, 80, 40))
 start_battle_region = to_relative((1140, 720, 120, 50))
 proceed_region = to_relative((1155, 742, 143, 39))
 defeated_region = to_relative((530, 200, 330, 80))
+
+
+regular_joystick = to_relative((1244,614))
+super_joystick = to_relative((1088, 677))

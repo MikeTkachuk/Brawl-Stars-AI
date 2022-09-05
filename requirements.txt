@@ -3,3 +3,4 @@ pyefd
 gym
 numpy
 opencv-python
+mouse

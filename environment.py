@@ -158,6 +158,7 @@ class GymEnv(gym.Env):
         make_move = Value('i', 0)
         make_shot = Value('i', 0)
         shoot_direction = Value(Vector, 1, 0)
+        shoot_strength = Value('d', 0.0)
         super_ability = Value('i', 0)
         use_gadget = Value('i', 0)
 
@@ -166,6 +167,7 @@ class GymEnv(gym.Env):
             make_move,
             make_shot,
             shoot_direction,
+            shoot_strength,
             super_ability,
             use_gadget
         ))
@@ -200,6 +202,7 @@ class GymEnv(gym.Env):
             else:
                 v.value = action[k]
         screen, parse_results = self.parser.get_state()
+        return screen
 
     def reset(
             self,
@@ -214,6 +217,9 @@ class GymEnv(gym.Env):
         observation = grab_screen(self.parser.main_screen)
         info = {}
         return (observation, info) if return_info else observation
+
+    def __exit__(self, exc_type=None, exc_val=None, exc_tb=None):
+        self.acting_process.terminate()
 
     def render(self, mode="human"):
         return
