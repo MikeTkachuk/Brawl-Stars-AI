@@ -43,7 +43,7 @@ def run_loop():
 
             direction = np.dot(features, weights).flatten()
             direction = np.array([np.cos(angle_), np.sin(angle_)])
-            direction = (1,0)
+            #direction = (1,0)
             make_shot = 0
             super_ability = 1
             if 'U' in keys_pressed:

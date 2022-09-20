@@ -135,10 +135,12 @@ def shooting_routine(old, new):
     print(mouse.is_pressed())
     if make_shot[0] or super_ability[0] == super_ability[1]:
         print('case NO CHANGE')
-        mouse.move(*_relative_to_pixel(joystick, config.main_screen, absolute=True),
-                   duration=movement_duration)  # move to init location
+        if make_shot[0]:
+            mouse.move(*_relative_to_pixel(joystick, config.main_screen, absolute=True),
+                       duration=movement_duration)  # move to init location if released
         _press_move(joystick, (shoot_direction_x[1], shoot_direction_y[1]), shoot_strength[1])
         if make_shot[1]:
+            time.sleep(movement_duration)
             mouse.release()
     else:  # if already aiming at different joystick
         print('case RESET')
@@ -147,6 +149,7 @@ def shooting_routine(old, new):
                    duration=movement_duration)  # move to init location
         _press_move(joystick, (shoot_direction_x[1], shoot_direction_y[1]), shoot_strength[1])
         if make_shot[1]:
+            time.sleep(movement_duration)
             mouse.release()
 
 
@@ -157,7 +160,8 @@ def act(
         shoot_direction=None,
         shoot_strength=None,
         super_ability=None,
-        use_gadget=None
+        use_gadget=None,
+        changed=None,
 ):
     """
     Run an action. Use shared states to change the action during the run. Runs an infinite loop
@@ -169,6 +173,9 @@ def act(
     :param shoot_strength: float [0,1], how far to throw (for throwing abilities)
     :param super_ability: int bool-like, whether to use the super ability
     :param use_gadget: int bool-like, whether to use a gadget
+
+    :param changed: int bool-like. if params were updated
+
     :return:
     """
 
@@ -247,29 +254,6 @@ def act(
             use_gadget_local
         )
 
-    def _get_local_copy():
-        return (
-            act.direction_x_local,
-            act.direction_y_local,
-            act.make_move_local,
-
-            act.make_shot_local,
-            act.shoot_direction_x_local,
-            act.shoot_direction_y_local,
-            act.shoot_strength_local,
-            act.super_ability_local,
-
-            act.use_gadget_local
-        )
-
-    def _spot_change():
-        pulled = _make_args_local_copy()
-        changed_ = [a != b for a, b in
-                    zip(_get_local_copy(),
-                        pulled)
-                    ]
-        return any(changed_)
-
     (
         act.direction_x_local,
         act.direction_y_local,
@@ -286,8 +270,9 @@ def act(
     movement_controls = init()
     while True:
         # inside loop
-        changed = _spot_change()
-        if changed:
+        if changed.value:
+            with changed.get_lock():
+                changed.value = 0
             movement_controls = init()
 
         # if np.random.uniform() > 0.9997: print('im here', len(movement_controls))

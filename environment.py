@@ -141,6 +141,7 @@ class GymEnv(gym.Env):
         shoot_strength = Value('d', 0.0)
         super_ability = Value('i', 0)
         use_gadget = Value('i', 0)
+        changed = Value('i', 0)
 
         self.acting_process = Process(target=act, args=(
             direction,
@@ -149,7 +150,8 @@ class GymEnv(gym.Env):
             shoot_direction,
             shoot_strength,
             super_ability,
-            use_gadget
+            use_gadget,
+            changed
         ))
         self.acting_process.start()
         print('New control started.')
@@ -161,7 +163,8 @@ class GymEnv(gym.Env):
             'shoot_direction': shoot_direction,
             'shoot_strength': shoot_strength,
             'super_ability': super_ability,
-            'use_gadget': use_gadget
+            'use_gadget': use_gadget,
+            'changed': changed
         }
 
     def _interpret_parsed_screen(self, parsed):
@@ -189,6 +192,8 @@ class GymEnv(gym.Env):
                 v.y = action[k][1]
             else:
                 v.value = action[k]
+        with self.action_transmitter['changed'].get_lock():
+            self.action_transmitter['changed'].value = 1
         screen, parse_results = self.parser.get_state()
         return screen
 
