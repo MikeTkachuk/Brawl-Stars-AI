@@ -1,2 +1,6 @@
 pytesseract
-#tesserocr
+pyefd
+gym
+numpy
+opencv-python
+mouse

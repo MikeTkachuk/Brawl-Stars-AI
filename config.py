@@ -1,17 +1,25 @@
+import numpy as np
+
 # ===============
 # paths
 # ===============
 tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract'
+digit_database = r'C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\digits'
+digit_signed_database = r'C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\digits_signed'
+exit_database = r'C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\exit'
+play_database = r'C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\play'
+defeated_database = r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\defeated"
+proceed_database = r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\proceed"
 
 # ===============
 # controls config
 # ===============
-forward = hex(17)
-backward = hex(31)
-left = hex(30)
-right = hex(32)
+forward = 17
+backward = 31
+left = 30
+right = 32
 
-gadget = hex(33)
+gadget = 33
 
 # ===============
 # screen locations config
@@ -20,9 +28,13 @@ gadget = hex(33)
 # ===============
 
 # --- main screen absolute size ---
-main_screen = (0, 41, 1388, 822)  # absolute. Should be changed in case of main screen displacement
+main_screen = (0, 41, 1388, 781)  # absolute. Should be changed in case of main screen displacement
 
-ref_main_screen = (0, 41, 1388, 822)  # to fix the relative calculations. Should not be changed
+# do NOT change without full recalibration
+ref_main_screen = (0, 41, 1388, 781)    # to fix the relative calculations.
+                                        # Should NOT be changed unless calibrating from scratch!
+####
+
 screen_x, screen_y = ref_main_screen[0], ref_main_screen[1]
 screen_width, screen_height = ref_main_screen[2], ref_main_screen[3]
 
@@ -43,9 +55,37 @@ def to_relative(region):
         )
 
 
-end_screen_title = to_relative((55, 41, 340, 135))
-score_region = to_relative((115,170,80,60))
-player_trophies_region = to_relative((620, 143, 103, 40))
+def _relative_to_pixel(point, main_scr, absolute=False):
+    """
+    Convert relative to absolute
+    :param point: (x,y) or region (x, y, w, h) relative to main top left corner
+    :param main_scr: tuple xywh of main screen in pixels
+    :param absolute: bool, if False calculates pixel locations relative to main screen
+    :return: pixel point or region
+    """
+    mx, my, mw, mh = main_scr
+    if len(point) == 2:
+        out = np.array([point[0] * mw, point[1] * mh], dtype=np.int32)
+        if absolute:
+            out += np.array([mx, my], dtype=np.int32)
+        return out
+    if len(point) == 4:
+        out = np.array([point[0] * mw, point[1] * mh, point[2] * mw, point[3] * mh], dtype=np.int32)
+        if absolute:
+            out += np.array([mx, my, 0, 0], dtype=np.int32)
+        return out
 
-exit_end_screen = to_relative((1224, 763))
-start_battle = to_relative((1192, 742))
+
+end_screen_title_region = to_relative((55, 55, 360, 120))
+score_region = to_relative((117, 177, 80, 45))
+player_trophies_region = to_relative((629, 148, 64, 30))
+
+exit_end_screen_region = to_relative((1185, 740, 80, 40))
+start_battle_region = to_relative((1140, 720, 120, 50))
+proceed_region = to_relative((1155, 742, 143, 39))
+defeated_region = to_relative((530, 200, 330, 80))
+
+
+regular_joystick = to_relative((1244,614))
+super_joystick = to_relative((1088, 677))
+joystick_radius = 78

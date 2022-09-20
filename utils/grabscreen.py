@@ -30,7 +30,7 @@ def grab_screen(region=None):
     memdc.BitBlt((0, 0), (width, height), srcdc, (left, top), win32con.SRCCOPY)
 
     signedIntsArray = bmp.GetBitmapBits(True)
-    img = np.fromstring(signedIntsArray, dtype='uint8')
+    img = np.frombuffer(signedIntsArray, dtype='uint8')
     img.shape = (height, width, 4)
 
     srcdc.DeleteDC()
