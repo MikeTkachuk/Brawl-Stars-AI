@@ -2,6 +2,7 @@ from utils.grabscreen import grab_screen
 import cv2 as cv
 import numpy as np
 import config
+from config import _relative_to_pixel
 import pytesseract
 import os
 from utils.custom_ocr import save_templates, match
@@ -29,27 +30,6 @@ def _ocr_preproc(rgb_screen, region, thresh=(150, 255), erosion=7):
     rgb_region = cv.erode(rgb_region, np.ones((erosion, erosion), np.uint8))
     rgb_region = cv.cvtColor(np.expand_dims(rgb_region, -1), cv.COLOR_GRAY2RGB)
     return rgb_region
-
-
-def _relative_to_pixel(point, main_screen, absolute=False):
-    """
-    Convert relative to absolute
-    :param point: (x,y) or region (x, y, w, h) relative to main top left corner
-    :param main_screen: tuple xywh of main screen in pixels
-    :param absolute: bool, if False calculates pixel locations relative to main screen
-    :return: pixel point or region
-    """
-    mx, my, mw, mh = main_screen
-    if len(point) == 2:
-        out = np.array([point[0] * mw, point[1] * mh], dtype=np.int32)
-        if absolute:
-            out += np.array([mx, my], dtype=np.int32)
-        return out
-    if len(point) == 4:
-        out = np.array([point[0] * mw, point[1] * mh, point[2] * mw, point[3] * mh], dtype=np.int32)
-        if absolute:
-            out += np.array([mx, my, 0, 0], dtype=np.int32)
-        return out
 
 
 class ScreenParser:
@@ -179,6 +159,7 @@ class GymEnv(gym.Env):
             'make_move': make_move,
             'make_shot': make_shot,
             'shoot_direction': shoot_direction,
+            'shoot_strength': shoot_strength,
             'super_ability': super_ability,
             'use_gadget': use_gadget
         }
@@ -189,9 +170,16 @@ class GymEnv(gym.Env):
 
     def step(self, action):
         """
-        Start an action running until the next step call. Return the screen observed at the same time
-        :param action:
-        :return:
+        Update the action params valid until the next step call. Return the screen observed at the same time
+
+        :param action: optional kwargs of form {direction': (x,y), norm != 0,
+            'make_move': int bool like,
+            'make_shot': int bool like,
+            'shoot_direction': (x,y), norm != 0,
+            'shoot_strength': float in [0,1],
+            'super_ability': int bool like,
+            'use_gadget': int bool like}
+        :return: np.ndarray. screen img
         """
         for k, v in self.action_transmitter.items():
             if k not in action:

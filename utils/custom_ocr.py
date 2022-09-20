@@ -107,6 +107,8 @@ def match(inp, db, crop=(0, 1), score_thresh=1E-4, verbose=0):
     img, cnt = _parse_sample(inp, crop=crop)
     out = ''
     for c in sort(cnt):  # read left to right
+        if c.size < 4:  # if one point
+            continue
         chars, scores = [], []
         c_skew = np.sign(_contour_skew(c)[1])
         c_fourier, transforms = pyefd.elliptic_fourier_descriptors(

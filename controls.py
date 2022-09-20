@@ -2,8 +2,12 @@ import time
 
 from utils.directkeys import PressKey, ReleaseKey
 import config
+from config import _relative_to_pixel
 import numpy as np
 import mouse
+import ctypes
+
+ctypes.windll.shcore.SetProcessDpiAwareness(2)  # https://github.com/boppreh/mouse/issues/122
 
 
 def straight():
@@ -99,7 +103,51 @@ def generate_dir(direction):
 
 
 def shooting_routine(old, new):
-    pass
+    movement_duration = 0.05
+
+    def _press_move(center, dir_xy, strength):
+        mouse.press()
+        time.sleep(movement_duration)
+        x_center, y_center = _relative_to_pixel(center, config.main_screen, absolute=True)
+        cos, sin = np.array(dir_xy) / np.linalg.norm(dir_xy)
+        x = cos * config.joystick_radius * strength + x_center
+        y = sin * config.joystick_radius * strength + y_center
+        mouse.move(x, y, duration=movement_duration)
+
+    def _reset_joystick(center):
+        _press_move(center, (1, 0), 1.0)
+        time.sleep(movement_duration)
+        _press_move(center, (1, 0), 0.0)
+        time.sleep(movement_duration)
+        mouse.release()
+        time.sleep(movement_duration)
+
+    (make_shot,
+     shoot_direction_x,
+     shoot_direction_y,
+     shoot_strength,
+     super_ability,) = list(zip(old, new))
+
+    joystick = config.super_joystick if super_ability[1] else config.regular_joystick
+    prev_joystick = config.super_joystick if super_ability[0] else config.regular_joystick
+
+    # if mouse is not clicked or no change in joysticks, do the job
+    print(mouse.is_pressed())
+    if make_shot[0] or super_ability[0] == super_ability[1]:
+        print('case NO CHANGE')
+        mouse.move(*_relative_to_pixel(joystick, config.main_screen, absolute=True),
+                   duration=movement_duration)  # move to init location
+        _press_move(joystick, (shoot_direction_x[1], shoot_direction_y[1]), shoot_strength[1])
+        if make_shot[1]:
+            mouse.release()
+    else:  # if already aiming at different joystick
+        print('case RESET')
+        _reset_joystick(prev_joystick)
+        mouse.move(*_relative_to_pixel(joystick, config.main_screen, absolute=True),
+                   duration=movement_duration)  # move to init location
+        _press_move(joystick, (shoot_direction_x[1], shoot_direction_y[1]), shoot_strength[1])
+        if make_shot[1]:
+            mouse.release()
 
 
 def act(
@@ -136,7 +184,8 @@ def act(
 
     # init act.vars
     def init():
-        store_old = (act.shoot_direction_x_local,
+        store_old = (act.make_shot_local,
+                     act.shoot_direction_x_local,
                      act.shoot_direction_y_local,
                      act.shoot_strength_local,
                      act.super_ability_local,)
@@ -160,14 +209,15 @@ def act(
         else:
             movements_ = generate_dir((act.direction_x_local, act.direction_y_local))
 
-        shooting_routine(store_old, (act.make_shot_local,
-            act.shoot_direction_x_local,
-            act.shoot_direction_y_local,
-            act.shoot_strength_local,
-            act.super_ability_local,))
+        if act.use_gadget_local:
+            PressKey(config.gadget)
+            ReleaseKey(config.gadget)
 
-        PressKey(config.gadget)
-        ReleaseKey(config.gadget)
+        shooting_routine(store_old, (act.make_shot_local,
+                                     act.shoot_direction_x_local,
+                                     act.shoot_direction_y_local,
+                                     act.shoot_strength_local,
+                                     act.super_ability_local,))
 
         return movements_
 
@@ -182,7 +232,7 @@ def act(
         shoot_strength_local = float(shoot_strength.value)
         super_ability_local = int(super_ability.value)
 
-        use_gadget_local = int(use_gadget)
+        use_gadget_local = int(use_gadget.value)
         return (
             direction_x_local,
             direction_y_local,
@@ -220,6 +270,19 @@ def act(
                     ]
         return any(changed_)
 
+    (
+        act.direction_x_local,
+        act.direction_y_local,
+        act.make_move_local,
+
+        act.make_shot_local,
+        act.shoot_direction_x_local,
+        act.shoot_direction_y_local,
+        act.shoot_strength_local,
+        act.super_ability_local,
+
+        act.use_gadget_local
+    ) = _make_args_local_copy()
     movement_controls = init()
     while True:
         # inside loop
@@ -227,7 +290,7 @@ def act(
         if changed:
             movement_controls = init()
 
-        print('im here', len(movement_controls))
+        # if np.random.uniform() > 0.9997: print('im here', len(movement_controls))
         for func in movement_controls:
             func()
             time.sleep(0.1)
