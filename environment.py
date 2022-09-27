@@ -5,8 +5,9 @@ import config
 from config import _relative_to_pixel
 import pytesseract
 import os
+import time
 from utils.custom_ocr import save_templates, match
-from controls import act
+from controls import act, reset_controls, exit_end_screen, start_battle, exit_defeated
 
 import gym
 from gym import spaces
@@ -101,7 +102,7 @@ class ScreenParser:
         proceed = _ocr_preproc(screen, proceed_region)
         proceed_text = match(cv.cvtColor(proceed, cv.COLOR_RGB2GRAY), self.proceed_database)
         return end_title_text, score_text, player_trophies_text, \
-            exit_end_screen_text, start_battle_text, defeated_text, proceed_text
+               exit_end_screen_text, start_battle_text, defeated_text, proceed_text
 
     def get_state(self):
         """
@@ -114,26 +115,76 @@ class ScreenParser:
         (end_title_text, score_text, player_trophies,
          exit_text, play_text, defeated_text, proceed_text) = parse_results
 
+        print('Parsed:')
         print(end_title_text, score_text, player_trophies,
               exit_text, play_text, defeated_text, proceed_text)
-        return screen, parse_results
+        return screen, [s.lower().strip(':!. \t—\n') for s in parse_results]
 
 
 class Vector(Structure):
     _fields_ = [('x', c_double), ('y', c_double)]
 
 
+class ActingProcess:
+    def __init__(self, proc, shared_data=None):
+        """
+
+        :param proc: A raw process that has not been terminated yet
+        :param shared_data: an optional dict of multiprocessing shared data objects
+        """
+        self.proc = proc
+        self.shared_data = shared_data or {}
+        self._started = proc.is_alive()
+        self._exited = False
+
+    def __exit__(self, exc_type=None, exc_val=None, exc_tb=None):
+        if self._exited or not self._started:
+            raise RuntimeError("The process is not alive, can not exit.")
+        self.proc.terminate()
+        reset_controls()
+        self._exited = True
+        print('Terminated latest control process.')
+
+    def exit(self):
+        self.__exit__()
+
+    def start(self):
+        if self._exited or self._started:
+            raise RuntimeError("Repeated initialization is not supported.")
+        self.proc.start()
+        self._started = True
+        print('New control process started.')
+
+    def update_data(self, data):
+        """
+        Update the shared data
+        :param data: dict of data with the keys present in the shared_data param upon object init
+        :return:
+        """
+        for k, v in self.shared_data.items():
+            if k not in data:
+                continue
+            if 'direction' in k:
+                v.x = data[k][0]
+                v.y = data[k][1]
+            else:
+                v.value = data[k]
+        with self.shared_data['changed'].get_lock():
+            self.shared_data['changed'].value = 1
+
+
 class GymEnv(gym.Env):
     def __init__(self, parser: ScreenParser):
         self.parser = parser
         self.acting_process = None
-        self.action_transmitter = None
+        self.done = False
 
     def _init_control_process(self):
         if self.acting_process is not None:
-            self.acting_process.terminate()
-            print('Terminated latest control.')
-
+            try:
+                self.acting_process.exit()
+            except RuntimeError:
+                pass
         direction = Value(Vector, 1, 0)
         make_move = Value('i', 0)
         make_shot = Value('i', 0)
@@ -143,7 +194,7 @@ class GymEnv(gym.Env):
         use_gadget = Value('i', 0)
         changed = Value('i', 0)
 
-        self.acting_process = Process(target=act, args=(
+        proc = Process(target=act, args=(
             direction,
             make_move,
             make_shot,
@@ -153,10 +204,8 @@ class GymEnv(gym.Env):
             use_gadget,
             changed
         ))
-        self.acting_process.start()
-        print('New control started.')
 
-        self.action_transmitter = {
+        action_transmitter = {
             'direction': direction,
             'make_move': make_move,
             'make_shot': make_shot,
@@ -167,9 +216,69 @@ class GymEnv(gym.Env):
             'changed': changed
         }
 
-    def _interpret_parsed_screen(self, parsed):
+        self.acting_process = ActingProcess(proc=proc, shared_data=action_transmitter)
+        self.acting_process.start()
+
+    def _interpret_parsed_screen(self, parsed=None, max_patience=5):
+        """
+        A func to both interpret on-screen texts
+         and operate post-battle (leads to the main menu screen)
+        :param parsed: optional parsed screen texts
+        :return:
+        """
+        if parsed is None:
+            parsed = self.parser.get_state()[1]
         (end_title_text, score_text, player_trophies,
          exit_text, play_text, defeated_text, proceed_text) = parsed
+
+        reward = 0
+        terminated = False
+        truncated = False
+        info = {}
+
+        if any([defeated_text == 'defeated',
+                exit_text == 'exit',
+                proceed_text == 'proceed',
+                play_text == 'play']):
+            if self.acting_process is not None:
+                self.acting_process.exit()
+            terminated = True
+            patience = 0
+            while True:
+                if defeated_text == 'defeated':
+                    exit_defeated()
+                elif exit_text == 'exit' or proceed_text == 'proceed':
+                    if score_text:
+                        reward = float(score_text)
+                    else:
+                        raw_score = 0  # TODO remove
+                        if end_title_text in ['defeat', 'victory', 'draw']:
+                            if end_title_text == 'defeat':
+                                raw_score = -8
+                            elif end_title_text == 'victory':
+                                raw_score = 8
+                            else:
+                                raw_score = 0
+
+                        else:
+                            if 'rank' in end_title_text:
+                                raw_rank = int(end_title_text.replace('rank', '').strip(':!. \t—\n'))
+                                raw_score = np.linspace(-8, 8, 10)[-raw_rank]
+
+                            if 'you are' in end_title_text:
+                                raw_rank = 1
+                                raw_score = np.linspace(-8, 8, 10)[-raw_rank]
+                        reward = raw_score  # TODO add score weighting based on the total trophies
+                    exit_end_screen()
+                else:
+                    patience += 1
+                    if patience > max_patience:
+                        break
+                (end_title_text, score_text, player_trophies,
+                 exit_text, play_text, defeated_text, proceed_text) = self.parser.get_state()[1]
+                time.sleep(0.2)
+
+        return reward, terminated, truncated, info
 
     def step(self, action):
         """
@@ -184,18 +293,14 @@ class GymEnv(gym.Env):
             'use_gadget': int bool like}
         :return: np.ndarray. screen img
         """
-        for k, v in self.action_transmitter.items():
-            if k not in action:
-                continue
-            if 'direction' in k:
-                v.x = action[k][0]
-                v.y = action[k][1]
-            else:
-                v.value = action[k]
-        with self.action_transmitter['changed'].get_lock():
-            self.action_transmitter['changed'].value = 1
+        if self.done:
+            return None
+        self.acting_process.update_data(action)
         screen, parse_results = self.parser.get_state()
-        return screen
+        reward, terminated, truncated, info = self._interpret_parsed_screen(parse_results)
+        obs = screen
+        self.done = terminated
+        return obs, reward, terminated, truncated, info
 
     def reset(
             self,
@@ -206,13 +311,25 @@ class GymEnv(gym.Env):
     ):
         # TODO add skip end of the showdown battle
         super().reset(seed=seed)
+        if not self.done:
+            terminated = self._interpret_parsed_screen()[1]  # if entered main menu
+            if not terminated:
+                raise RuntimeError('Could not reset env.')
+            time.sleep(1)
+        while True:
+            if self.parser.get_state()[1][4] == 'play':
+                start_battle()
+            else:
+                break
+            time.sleep(0.2)
         self._init_control_process()
         observation = grab_screen(self.parser.main_screen)
         info = {}
+        self.done = False
         return (observation, info) if return_info else observation
 
     def __exit__(self, exc_type=None, exc_val=None, exc_tb=None):
-        self.acting_process.terminate()
+        self.acting_process.exit()
 
     def render(self, mode="human"):
         return

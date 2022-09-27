@@ -73,12 +73,30 @@ def stop_movement():
     ReleaseKey(config.left)
 
 
+def reset_controls():
+    stop_movement()
+    mouse.release()
+
+
 def start_battle():
-    pass
+    print('start func')
+    mouse.release()
+    mouse.move(*_relative_to_pixel(config.click_play, config.main_screen, absolute=True))
+    mouse.click()
 
 
 def exit_end_screen():
-    pass
+    print('exit func')
+    mouse.release()
+    mouse.move(*_relative_to_pixel(config.click_exit_proceed, config.main_screen, absolute=True))
+    mouse.click()
+
+
+def exit_defeated():
+    print('exit def func')
+    mouse.release()
+    mouse.move(*_relative_to_pixel(config.click_defeated, config.main_screen, absolute=True))
+    mouse.click()
 
 
 # assemble anchor directions and their corresponding controls
@@ -179,8 +197,6 @@ def act(
     :return:
     """
 
-    # TODO implement mouse radial movement (based on difference
-    #  in shoot_directions), clone for each of the shooting modes
     # TODO calculate shoot_strength => pixel distance. Add to config?
     # TODO make super <=> not super mode change via proper control release (spot if changed)
 

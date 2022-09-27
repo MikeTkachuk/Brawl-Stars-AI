@@ -59,7 +59,7 @@ def run_loop():
                 make_shot = 1
                 super_ability = 1
             if keys_pressed:
-                obs = env.step({
+                obs, reward, done, _, info = env.step({
                     'direction': direction,
                     'make_move': 0,
                     'make_shot': make_shot,
@@ -70,6 +70,9 @@ def run_loop():
                 angle_ += 0.1
                 angle_ %= 2*np.pi
                 print('elapsed: ', time.time() - start_)
+                print(reward, done)
+                if done:
+                    env.reset()
 
         if 'Z' in keys_pressed:
             paused = not paused
@@ -81,6 +84,7 @@ def run_loop():
             env.__exit__()
             break
         time.sleep(0.05)
+        print(paused)
 
 
 if __name__ == '__main__':

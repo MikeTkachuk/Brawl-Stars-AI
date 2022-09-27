@@ -28,7 +28,7 @@ gadget = 33
 # ===============
 
 # --- main screen absolute size ---
-main_screen = (0, 41, 1388, 781)  # absolute. Should be changed in case of main screen displacement
+main_screen = (0, 41, 1388, 781)  # absolute. The only thing that should be changed in case of main screen displacement
 
 # do NOT change without full recalibration
 ref_main_screen = (0, 41, 1388, 781)    # to fix the relative calculations.
@@ -85,6 +85,9 @@ start_battle_region = to_relative((1140, 720, 120, 50))
 proceed_region = to_relative((1155, 742, 143, 39))
 defeated_region = to_relative((530, 200, 330, 80))
 
+click_defeated = to_relative((696, 764))
+click_exit_proceed = to_relative((1225, 760))
+click_play = to_relative((1200, 745))
 
 regular_joystick = to_relative((1244,614))
 super_joystick = to_relative((1088, 677))
