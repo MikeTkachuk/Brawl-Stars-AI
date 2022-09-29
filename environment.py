@@ -233,7 +233,6 @@ class GymEnv(gym.Env):
 
         reward = 0
         terminated = False
-        truncated = False
         info = {}
 
         if any([defeated_text == 'defeated',
@@ -278,7 +277,7 @@ class GymEnv(gym.Env):
                  exit_text, play_text, defeated_text, proceed_text) = self.parser.get_state()[1]
                 time.sleep(0.2)
 
-        return reward, terminated, truncated, info
+        return reward, terminated, info
 
     def step(self, action):
         """
@@ -297,25 +296,26 @@ class GymEnv(gym.Env):
             return None
         self.acting_process.update_data(action)
         screen, parse_results = self.parser.get_state()
-        reward, terminated, truncated, info = self._interpret_parsed_screen(parse_results)
+        reward, terminated, info = self._interpret_parsed_screen(parse_results)
         obs = screen
         self.done = terminated
-        return obs, reward, terminated, truncated, info
+        return obs, reward, terminated, info
 
     def reset(
             self,
-            *,
-            seed=None,
-            return_info=False,
-            options=None,
+            timeout=50
     ):
         # TODO add skip end of the showdown battle
-        super().reset(seed=seed)
+        super().reset()
         if not self.done:
-            terminated = self._interpret_parsed_screen()[1]  # if entered main menu
-            if not terminated:
-                raise RuntimeError('Could not reset env.')
-            time.sleep(1)
+            for attempt in range(timeout//5):
+                terminated = self._interpret_parsed_screen()[1]  # if entered main menu
+                if terminated:
+                    break
+                time.sleep(5)
+            else:
+                raise RuntimeError('Env reset timeout.')
+
         while True:
             if self.parser.get_state()[1][4] == 'play':
                 start_battle()
@@ -324,9 +324,8 @@ class GymEnv(gym.Env):
             time.sleep(0.2)
         self._init_control_process()
         observation = grab_screen(self.parser.main_screen)
-        info = {}
         self.done = False
-        return (observation, info) if return_info else observation
+        return observation
 
     def __exit__(self, exc_type=None, exc_val=None, exc_tb=None):
         self.acting_process.exit()
