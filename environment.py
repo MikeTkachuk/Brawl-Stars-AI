@@ -7,6 +7,7 @@ import pytesseract
 import os
 import time
 from utils.custom_ocr import save_templates, match
+from utils.utils import is_power_of_two
 from controls import act, reset_controls, exit_end_screen, start_battle, exit_defeated
 
 import gym
@@ -15,6 +16,8 @@ from typing import Optional, Union, List
 from multiprocessing import Process
 from multiprocessing.sharedctypes import Value
 from ctypes import Structure, c_double
+
+import torch
 
 
 def _ocr_preproc(rgb_screen, region, thresh=(150, 255), erosion=7):
@@ -174,10 +177,23 @@ class ActingProcess:
 
 
 class GymEnv(gym.Env):
-    def __init__(self, parser: ScreenParser):
+    def __init__(self, parser: ScreenParser, move_shot_anchors=(8, 8)):
+        """
+        Real time Brawl Stars environment
+        :param parser: an instance of screen parser to interpret the game frame
+        :param move_shot_anchors: int or (int, int) - num anchors for movement dir and shoot dir respectively
+                                    used for action tokenization during training. default 8
+        """
         self.parser = parser
         self.acting_process = None
         self.done = False
+        self.move_shot_anchors = move_shot_anchors if isinstance(move_shot_anchors, tuple) else (move_shot_anchors,) * 2
+        if not is_power_of_two(self.move_shot_anchors[0]) or not is_power_of_two(self.move_shot_anchors[1]):
+            raise ValueError('Num anchors that is not a power of 2 is not allowed.')
+
+        self.action_space = spaces.Discrete(
+            n=2 ** 4 * np.prod(self.move_shot_anchors))  # 2^#binary_actions*prod(#anchors)
+        self.continuous_action_space = spaces.Box(0, 1, shape=(3,))
 
     def _init_control_process(self):
         if self.acting_process is not None:
@@ -279,6 +295,35 @@ class GymEnv(gym.Env):
 
         return reward, terminated, info
 
+    def _parse_action_token(self, action):
+        assert len(action) == 4  # 1 token + 3 continuous [0,1]: (move, shot, strength)
+        assert 0 <= action[0] < self.action_space.n
+        bins = str(bin(int(action[0])))[2:]
+        make_move, make_shot, super_ability, use_gadget = bins[:4]
+
+        move_n_bits = len(str(bin(self.move_shot_anchors[0]))) - 2
+        move_anchor = int(bins[4:4+move_n_bits], 2)
+
+        shot_n_bits = len(str(bin(self.move_shot_anchors[1]))) - 2
+        shot_anchor = int(bins[4+move_n_bits: 4 + move_n_bits + shot_n_bits], 2)
+
+        def _get_anchor_dir(anchor_num, total, shift=0.0):
+            angle_shift = 1 / total * 2 * np.pi * (shift - 0.5)  # assumes shift is in [0, 1]
+            angle = anchor_num / total * 2 * np.pi + angle_shift
+            anchor = np.array([np.cos(angle), np.sin(angle)])
+            return anchor
+
+        parsed_action = {
+            'direction': _get_anchor_dir(move_anchor, self.move_shot_anchors[0], action[1]),
+            'make_move': make_move,
+            'make_shot': make_shot,
+            'shoot_direction': _get_anchor_dir(shot_anchor, self.move_shot_anchors[1], action[2]),
+            'shoot_strength': action[3],
+            'super_ability': super_ability,
+            'use_gadget': use_gadget,
+        }
+        return parsed_action
+
     def step(self, action):
         """
         Update the action params valid until the next step call. Return the screen observed at the same time
@@ -290,10 +335,16 @@ class GymEnv(gym.Env):
             'shoot_strength': float in [0,1],
             'super_ability': int bool like,
             'use_gadget': int bool like}
+
+            If torch.Tensor it is parsed separately
         :return: np.ndarray. screen img
         """
         if self.done:
             return None
+
+        if isinstance(action, torch.Tensor):
+            action = self._parse_action_token(action)
+
         self.acting_process.update_data(action)
         screen, parse_results = self.parser.get_state()
         reward, terminated, info = self._interpret_parsed_screen(parse_results)
@@ -308,7 +359,7 @@ class GymEnv(gym.Env):
         # TODO add skip end of the showdown battle
         super().reset()
         if not self.done:
-            for attempt in range(timeout//5):
+            for attempt in range(timeout // 5):
                 terminated = self._interpret_parsed_screen()[1]  # if entered main menu
                 if terminated:
                     break
