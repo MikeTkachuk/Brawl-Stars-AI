@@ -12,7 +12,7 @@ from controls import act, reset_controls, exit_end_screen, start_battle, exit_de
 
 import gym
 from gym import spaces
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Any
 from multiprocessing import Process
 from multiprocessing.sharedctypes import Value
 from ctypes import Structure, c_double
@@ -184,6 +184,7 @@ class GymEnv(gym.Env):
         :param move_shot_anchors: int or (int, int) - num anchors for movement dir and shoot dir respectively
                                     used for action tokenization during training. default 8
         """
+        print('Creating env instance')
         self.parser = parser
         self.acting_process = None
         self.done = False
@@ -299,13 +300,18 @@ class GymEnv(gym.Env):
         assert len(action) == 4  # 1 token + 3 continuous [0,1]: (move, shot, strength)
         assert 0 <= action[0] < self.action_space.n
         bins = str(bin(int(action[0])))[2:]
+        desired_len = len(str(bin(self.action_space.n - 1))) - 2
+        bins = '0'*(desired_len - len(bins)) + bins  # pad with 0
+
         make_move, make_shot, super_ability, use_gadget = bins[:4]
 
-        move_n_bits = len(str(bin(self.move_shot_anchors[0]))) - 2
-        move_anchor = int(bins[4:4+move_n_bits], 2)
+        move_n_bits = len(str(bin(self.move_shot_anchors[0] - 1))) - 2
+        move_anchor = int(bins[4:4 + move_n_bits], 2)
+        assert len(bins[4:4 + move_n_bits]) == move_n_bits  # just to check myself
 
-        shot_n_bits = len(str(bin(self.move_shot_anchors[1]))) - 2
-        shot_anchor = int(bins[4+move_n_bits: 4 + move_n_bits + shot_n_bits], 2)
+        shot_n_bits = len(str(bin(self.move_shot_anchors[1] - 1))) - 2
+        shot_anchor = int(bins[4 + move_n_bits: 4 + move_n_bits + shot_n_bits], 2)
+        assert len(bins[4 + move_n_bits: 4 + move_n_bits + shot_n_bits]) == shot_n_bits
 
         def _get_anchor_dir(anchor_num, total, shift=0.0):
             angle_shift = 1 / total * 2 * np.pi * (shift - 0.5)  # assumes shift is in [0, 1]
@@ -315,16 +321,19 @@ class GymEnv(gym.Env):
 
         parsed_action = {
             'direction': _get_anchor_dir(move_anchor, self.move_shot_anchors[0], action[1]),
-            'make_move': make_move,
-            'make_shot': make_shot,
+            'make_move': int(make_move),
+            'make_shot': int(make_shot),
             'shoot_direction': _get_anchor_dir(shot_anchor, self.move_shot_anchors[1], action[2]),
             'shoot_strength': action[3],
-            'super_ability': super_ability,
-            'use_gadget': use_gadget,
+            'super_ability': int(super_ability),
+            'use_gadget': int(use_gadget),
         }
         return parsed_action
 
-    def step(self, action):
+    def _obs_preproc(self, obs):
+        return cv.resize(obs, (64, 64)).astype(np.float32)
+
+    def step(self, action: Union[dict, Any]):
         """
         Update the action params valid until the next step call. Return the screen observed at the same time
 
@@ -336,19 +345,23 @@ class GymEnv(gym.Env):
             'super_ability': int bool like,
             'use_gadget': int bool like}
 
-            If torch.Tensor it is parsed separately
+            If not dict it is parsed separately as an array-like:
+                1st place - action token
+                nth others - continuous params
         :return: np.ndarray. screen img
         """
+        print(f"Received a step!!! {action}")
         if self.done:
             return None
 
-        if isinstance(action, torch.Tensor):
+        if not isinstance(action, dict):
             action = self._parse_action_token(action)
 
+        print(f"Parsed the step {action}")
         self.acting_process.update_data(action)
         screen, parse_results = self.parser.get_state()
         reward, terminated, info = self._interpret_parsed_screen(parse_results)
-        obs = screen
+        obs = self._obs_preproc(screen)
         self.done = terminated
         return obs, reward, terminated, info
 
@@ -357,7 +370,6 @@ class GymEnv(gym.Env):
             timeout=50
     ):
         # TODO add skip end of the showdown battle
-        super().reset()
         if not self.done:
             for attempt in range(timeout // 5):
                 terminated = self._interpret_parsed_screen()[1]  # if entered main menu
@@ -374,7 +386,7 @@ class GymEnv(gym.Env):
                 break
             time.sleep(0.2)
         self._init_control_process()
-        observation = grab_screen(self.parser.main_screen)
+        observation = self._obs_preproc(self.parser.get_state()[0])
         self.done = False
         return observation
 
@@ -383,3 +395,7 @@ class GymEnv(gym.Env):
 
     def render(self, mode="human"):
         return
+
+
+def make_env():
+    return GymEnv(ScreenParser(), )
