@@ -21,6 +21,8 @@ right = 32
 
 gadget = 33
 
+terminate_program = 'Q'  # press Q to terminate everything with exit()
+
 # ===============
 # screen locations config
 # regions of form (x, y, width, height)

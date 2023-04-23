@@ -43,7 +43,6 @@ def run_loop():
 
             direction = np.dot(features, weights).flatten()
             direction = np.array([np.cos(angle_), np.sin(angle_)])
-            #direction = (1,0)
             make_shot = 0
             super_ability = 1
             if 'U' in keys_pressed:
@@ -59,7 +58,7 @@ def run_loop():
                 make_shot = 1
                 super_ability = 1
             if keys_pressed:
-                obs, reward, done, _, info = env.step({
+                obs, reward, done, info = env.step({
                     'direction': direction,
                     'make_move': 0,
                     'make_shot': make_shot,
@@ -84,7 +83,7 @@ def run_loop():
             env.__exit__()
             break
         time.sleep(0.05)
-        print(paused)
+        # print(paused)
 
 
 if __name__ == '__main__':

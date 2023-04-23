@@ -1,6 +1,10 @@
 pytesseract
-pyefd
+pyefd==1.6.0
 gym
 numpy
-opencv-python
+opencv-python==4.5.*
 mouse
+torch==1.12.1
+pypiwin32
+timm==0.4.12
+boto3==1.26.*

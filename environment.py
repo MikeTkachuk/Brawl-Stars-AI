@@ -6,6 +6,7 @@ from config import _relative_to_pixel
 import pytesseract
 import os
 import time
+import re
 from utils.custom_ocr import save_templates, match
 from utils.utils import is_power_of_two
 from controls import act, reset_controls, exit_end_screen, start_battle, exit_defeated
@@ -16,8 +17,7 @@ from typing import Optional, Union, List, Any
 from multiprocessing import Process
 from multiprocessing.sharedctypes import Value
 from ctypes import Structure, c_double
-
-import torch
+from utils.getkeys import key_check
 
 
 def _ocr_preproc(rgb_screen, region, thresh=(150, 255), erosion=7):
@@ -69,7 +69,6 @@ class ScreenParser:
         exit_end_screen_region = _relative_to_pixel(self.exit_end_screen_region, self.main_screen)
         exit_end_screen = _ocr_preproc(screen, exit_end_screen_region, thresh=(200, 255))
         exit_end_screen_text = match(cv.cvtColor(exit_end_screen, cv.COLOR_RGB2GRAY), self.exit_database)
-        # cv.imwrite('exit.png', exit_end_screen)
         if exit_end_screen_text == 'exit':  # run slow tesseract only if inside exit screen
             end_title_region = _relative_to_pixel(self.end_screen_title_region, self.main_screen)
             end_title = _ocr_preproc(screen, end_title_region)
@@ -81,7 +80,6 @@ class ScreenParser:
             score_region = _relative_to_pixel(self.score_region, self.main_screen)
             score = _ocr_preproc(screen, score_region)
             score_text = match(cv.cvtColor(score, cv.COLOR_RGB2GRAY), self.digit_signed_database)
-            # cv.imwrite('+8.png', score)
         else:
             end_title_text = ''
             score_text = ''
@@ -89,7 +87,6 @@ class ScreenParser:
         start_battle_region = _relative_to_pixel(self.start_battle_region, self.main_screen)
         start_battle = _ocr_preproc(screen, start_battle_region, thresh=(200, 255))
         start_battle_text = match(cv.cvtColor(start_battle, cv.COLOR_RGB2GRAY), self.play_database)
-        # cv.imwrite('play.png', start_battle)
         if start_battle_text == 'play':  # read brawler total trophies only in the main menu
             player_trophies_region = _relative_to_pixel(self.player_trophies_region, self.main_screen)
             player_trophies = _ocr_preproc(screen, player_trophies_region)
@@ -278,7 +275,7 @@ class GymEnv(gym.Env):
 
                         else:
                             if 'rank' in end_title_text:
-                                raw_rank = int(end_title_text.replace('rank', '').strip(':!. \t—\n'))
+                                raw_rank = int(''.join(re.findall('[0-9]', end_title_text.replace('rank', ''))))
                                 raw_score = np.linspace(-8, 8, 10)[-raw_rank]
 
                             if 'you are' in end_title_text:
@@ -331,7 +328,7 @@ class GymEnv(gym.Env):
         return parsed_action
 
     def _obs_preproc(self, obs):
-        return cv.resize(obs, (64, 64)).astype(np.float32)
+        return cv.resize(obs, (256, 256)).astype(np.float32)
 
     def step(self, action: Union[dict, Any]):
         """
@@ -350,14 +347,16 @@ class GymEnv(gym.Env):
                 nth others - continuous params
         :return: np.ndarray. screen img
         """
-        print(f"Received a step!!! {action}")
+        if config.terminate_program in key_check():
+            self.__exit__()
+            exit()
+
         if self.done:
             return None
 
         if not isinstance(action, dict):
             action = self._parse_action_token(action)
 
-        print(f"Parsed the step {action}")
         self.acting_process.update_data(action)
         screen, parse_results = self.parser.get_state()
         reward, terminated, info = self._interpret_parsed_screen(parse_results)
@@ -369,7 +368,7 @@ class GymEnv(gym.Env):
             self,
             timeout=50
     ):
-        # TODO add skip end of the showdown battle
+        # TODO skip loading screen
         if not self.done:
             for attempt in range(timeout // 5):
                 terminated = self._interpret_parsed_screen()[1]  # if entered main menu
