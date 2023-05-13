@@ -37,6 +37,7 @@ def _ocr_preproc(rgb_screen, region, thresh=(150, 255), erosion=7):
 
 
 class ScreenParser:
+    """Custom visual parser of a brawl stars UI"""
     def __init__(self):
         # screen region helpers
         self.main_screen = config.main_screen
@@ -126,6 +127,10 @@ class Vector(Structure):
 
 
 class ActingProcess:
+    """
+    A class that handles UI controlling (keyboard and mouse)
+    and uninterrupted communication with the program
+    """
     def __init__(self, proc, shared_data=None):
         """
 
@@ -146,9 +151,11 @@ class ActingProcess:
         print('Terminated latest control process.')
 
     def exit(self):
+        """Terminates the processes"""
         self.__exit__()
 
     def start(self):
+        """Starts the process"""
         if self._exited or self._started:
             raise RuntimeError("Repeated initialization is not supported.")
         self.proc.start()
@@ -183,17 +190,23 @@ class GymEnv(gym.Env):
         """
         print('Creating env instance')
         self.parser = parser
-        self.acting_process = None
+        self.acting_process: ActingProcess = None
         self.done = False
         self.move_shot_anchors = move_shot_anchors if isinstance(move_shot_anchors, tuple) else (move_shot_anchors,) * 2
         if not is_power_of_two(self.move_shot_anchors[0]) or not is_power_of_two(self.move_shot_anchors[1]):
             raise ValueError('Num anchors that is not a power of 2 is not allowed.')
 
         self.action_space = spaces.Discrete(
-            n=2 ** 4 * np.prod(self.move_shot_anchors))  # 2^#binary_actions*prod(#anchors)
+            n=2 ** 4 * np.prod(self.move_shot_anchors))  # 2^#binary_actions * prod(#anchors)
         self.continuous_action_space = spaces.Box(0, 1, shape=(3,))
 
     def _init_control_process(self):
+        """
+            Creates an instance of ActingProcess,
+            connects it to a program with shared variables,
+            and runs the acting process
+        :return:
+        """
         if self.acting_process is not None:
             try:
                 self.acting_process.exit()
@@ -201,7 +214,7 @@ class GymEnv(gym.Env):
                 pass
         direction = Value(Vector, 1, 0)
         make_move = Value('i', 0)
-        make_shot = Value('i', 0)
+        make_shot = Value('i', 1)  # init mouse released
         shoot_direction = Value(Vector, 1, 0)
         shoot_strength = Value('d', 0.0)
         super_ability = Value('i', 0)
@@ -238,7 +251,9 @@ class GymEnv(gym.Env):
         A func to both interpret on-screen texts
          and operate post-battle (leads to the main menu screen)
         :param parsed: optional parsed screen texts
-        :return:
+        :return: parsed numeric reward or None,
+                 bool whether entered any of the terminal screens,
+                 dict info placeholder
         """
         if parsed is None:
             parsed = self.parser.get_state()[1]
@@ -294,6 +309,11 @@ class GymEnv(gym.Env):
         return reward, terminated, info
 
     def _parse_action_token(self, action):
+        """
+        Parse 1 multi-binary and 3 continuous action values
+        :param action: array-like of action values
+        :return: dict of parsed actions
+        """
         assert len(action) == 4  # 1 token + 3 continuous [0,1]: (move, shot, strength)
         assert 0 <= action[0] < self.action_space.n
         bins = str(bin(int(action[0])))[2:]
@@ -347,7 +367,7 @@ class GymEnv(gym.Env):
                 nth others - continuous params
         :return: np.ndarray. screen img
         """
-        if config.terminate_program in key_check():
+        if config.terminate_program in key_check():  # exits env if the user pressed the specified key
             self.__exit__()
             exit()
 
@@ -368,22 +388,30 @@ class GymEnv(gym.Env):
             self,
             timeout=50
     ):
-        # TODO skip loading screen
+        """
+            Kills acting process and waits for battle to end.
+            After that enters new battle and starts a new acting process
+        :param timeout: num seconds to wait for battle to end
+        :return: observation after reset
+        """
         if not self.done:
             for attempt in range(timeout // 5):
-                terminated = self._interpret_parsed_screen()[1]  # if entered main menu
+                terminated = self._interpret_parsed_screen()[1]  # if outside battle
                 if terminated:
                     break
                 time.sleep(5)
             else:
                 raise RuntimeError('Env reset timeout.')
 
-        while True:
-            if self.parser.get_state()[1][4] == 'play':
+        while True:  # takes some time for _interpret_parsed_screen to enter main menu
+            if self.parser.get_state()[1][4] == 'play':  # if in main menu
                 start_battle()
             else:
                 break
             time.sleep(0.2)
+
+        # TODO skip loading screen (technically it is starts here)
+
         self._init_control_process()
         observation = self._obs_preproc(self.parser.get_state()[0])
         self.done = False

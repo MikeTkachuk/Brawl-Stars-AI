@@ -8,3 +8,9 @@ The implementation key-words are:
 - real-time static ocr
 
 Refer to https://github.com/MikeTkachuk/Brawl_iris for modelling implementation.
+
+TODO: 
+- reach 2 it per second for agent
+- efficiently upload artifacts to aws
+- configure aws ec2 and batch
+- try pretraining tokenizer
