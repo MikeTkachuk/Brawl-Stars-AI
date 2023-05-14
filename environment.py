@@ -139,8 +139,12 @@ class ActingProcess:
         """
         self.proc = proc
         self.shared_data = shared_data or {}
-        self._started = proc.is_alive()
+        self._started = self.is_running  # get current process state
         self._exited = False
+
+    @property
+    def is_running(self):
+        return self.proc.is_alive()
 
     def __exit__(self, exc_type=None, exc_val=None, exc_tb=None):
         if self._exited or not self._started:
@@ -206,12 +210,12 @@ class GymEnv(gym.Env):
             connects it to a program with shared variables,
             and runs the acting process
         :return:
+        :raises: RuntimeError if called repeatedly
         """
-        if self.acting_process is not None:
-            try:
-                self.acting_process.exit()
-            except RuntimeError:
-                pass
+
+        if self.acting_process is not None and self.acting_process.is_running:
+            raise RuntimeError("Repeated env control process initialization encountered")
+
         direction = Value(Vector, 1, 0)
         make_move = Value('i', 0)
         make_shot = Value('i', 1)  # init mouse released
@@ -249,7 +253,7 @@ class GymEnv(gym.Env):
     def _interpret_parsed_screen(self, parsed=None, max_patience=5):
         """
         A func to both interpret on-screen texts
-         and operate post-battle (leads to the main menu screen)
+         and operate post-battle (kills controll process and leads to the main menu screen)
         :param parsed: optional parsed screen texts
         :return: parsed numeric reward or None,
                  bool whether entered any of the terminal screens,
@@ -371,6 +375,9 @@ class GymEnv(gym.Env):
             self.__exit__()
             exit()
 
+        if not self.acting_process.is_running:  # if resume is needed
+            self._init_control_process()
+
         if self.done:
             return None
 
@@ -394,6 +401,7 @@ class GymEnv(gym.Env):
         :param timeout: num seconds to wait for battle to end
         :return: observation after reset
         """
+        print('environment.GymEnv.reset: reset called')
         if not self.done:
             for attempt in range(timeout // 5):
                 terminated = self._interpret_parsed_screen()[1]  # if outside battle
@@ -418,7 +426,8 @@ class GymEnv(gym.Env):
         return observation
 
     def __exit__(self, exc_type=None, exc_val=None, exc_tb=None):
-        self.acting_process.exit()
+        if self.acting_process.is_running:
+            self.acting_process.exit()
 
     def render(self, mode="human"):
         return
