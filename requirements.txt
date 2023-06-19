@@ -1,9 +1,9 @@
 pytesseract
 pyefd==1.6.0
-gym
-numpy
+gym==0.21.0
+numpy==1.24.2
 opencv-python==4.5.*
-mouse
+mouse==0.7.1
 torch==1.12.1
 pypiwin32
 timm==0.4.12

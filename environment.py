@@ -402,7 +402,7 @@ class GymEnv(gym.Env):
         :return: observation after reset
         """
         print('environment.GymEnv.reset: reset called')
-        if not self.done:
+        if not self.done:  # TODO handle idle disconnection
             for attempt in range(timeout // 5):
                 terminated = self._interpret_parsed_screen()[1]  # if outside battle
                 if terminated:
