@@ -272,7 +272,7 @@ class GymEnv(gym.Env):
                 exit_text == 'exit',
                 proceed_text == 'proceed',
                 play_text == 'play']):
-            if self.acting_process is not None:
+            if self.acting_process is not None and self.acting_process.is_running:
                 self.acting_process.exit()
             terminated = True
             patience = 0

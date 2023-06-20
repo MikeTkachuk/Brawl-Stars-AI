@@ -5,6 +5,7 @@ numpy==1.24.2
 opencv-python==4.5.*
 mouse==0.7.1
 torch==1.12.1
-pypiwin32
+pypiwin32==223
+pywin32==306
 timm==0.4.12
 boto3==1.26.*
