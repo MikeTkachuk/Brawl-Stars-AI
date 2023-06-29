@@ -99,6 +99,12 @@ def exit_defeated():
     mouse.click()
 
 
+def idle_click():
+    mouse.release()
+    mouse.move(*_relative_to_pixel(config.click_idle, config.main_screen, absolute=True))
+    mouse.click()
+
+
 # assemble anchor directions and their corresponding controls
 angles = np.arange(32) / 32 * 2 * np.pi
 anchors = np.stack([np.cos(angles), np.sin(angles)], axis=1)

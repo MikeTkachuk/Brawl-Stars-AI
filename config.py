@@ -90,6 +90,7 @@ defeated_region = to_relative((530, 200, 330, 80))
 click_defeated = to_relative((696, 764))
 click_exit_proceed = to_relative((1225, 760))
 click_play = to_relative((1200, 745))
+click_idle = to_relative((1200, 400))
 
 regular_joystick = to_relative((1244,614))
 super_joystick = to_relative((1088, 677))

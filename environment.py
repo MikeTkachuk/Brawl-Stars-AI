@@ -250,7 +250,7 @@ class GymEnv(gym.Env):
         self.acting_process = ActingProcess(proc=proc, shared_data=action_transmitter)
         self.acting_process.start()
 
-    def _interpret_parsed_screen(self, parsed=None, max_patience=5):
+    def _interpret_parsed_screen(self, parsed=None, max_patience=30):
         """
         A func to both interpret on-screen texts
          and operate post-battle (kills controll process and leads to the main menu screen)
@@ -303,9 +303,13 @@ class GymEnv(gym.Env):
                         reward = raw_score  # TODO add score weighting based on the total trophies
                     exit_end_screen()
                 else:
-                    patience += 1
-                    if patience > max_patience:
-                        break
+                    time.sleep(1)
+                    break
+                patience += 1
+                if patience > max_patience:
+                    input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
+                    patience = 0
+
                 (end_title_text, score_text, player_trophies,
                  exit_text, play_text, defeated_text, proceed_text) = self.parser.get_state()[1]
                 time.sleep(0.2)
@@ -402,20 +406,28 @@ class GymEnv(gym.Env):
         :return: observation after reset
         """
         print('environment.GymEnv.reset: reset called')
-        if not self.done:  # TODO handle idle disconnection
-            for attempt in range(timeout // 5):
+        if not self.done:  # TODO handle idle disconnection and freezing.(Request manual help if buttons do not work)
+            patience = 0
+            while True:
                 terminated = self._interpret_parsed_screen()[1]  # if outside battle
                 if terminated:
                     break
-                time.sleep(5)
-            else:
-                raise RuntimeError('Env reset timeout.')
-
+                else:
+                    patience += 1
+                time.sleep(1)
+                if patience >= timeout:
+                    input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
+                    patience = 0
+        patience = 0
         while True:  # takes some time for _interpret_parsed_screen to enter main menu
             if self.parser.get_state()[1][4] == 'play':  # if in main menu
                 start_battle()
+                patience += 1
             else:
                 break
+            if patience >= timeout:
+                input('Battle start timeout. Manual intervention needed.\nPress Enter when ready...')
+                patience = 0
             time.sleep(0.2)
 
         # TODO skip loading screen (technically it is starts here)
