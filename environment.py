@@ -36,6 +36,19 @@ def _ocr_preproc(rgb_screen, region, thresh=(150, 255), erosion=7):
     return rgb_region
 
 
+def patience_wrapper(func, interval=0.2, timeout_steps=50):
+    patience = 0
+    while True:
+        if func():
+            break
+        else:
+            patience += 1
+            time.sleep(interval)
+        if patience >= timeout_steps:
+            input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
+            patience = 0
+
+
 class ScreenParser:
     """Custom visual parser of a brawl stars UI"""
     def __init__(self):
@@ -113,12 +126,6 @@ class ScreenParser:
         screen = grab_screen(self.main_screen)
         parse_results = self._parse_screen(screen)
 
-        (end_title_text, score_text, player_trophies,
-         exit_text, play_text, defeated_text, proceed_text) = parse_results
-
-        print('Parsed:')
-        print(end_title_text, score_text, player_trophies,
-              exit_text, play_text, defeated_text, proceed_text)
         return screen, [s.lower().strip(':!. \t—\n') for s in parse_results]
 
 
@@ -263,6 +270,8 @@ class GymEnv(gym.Env):
             parsed = self.parser.get_state()[1]
         (end_title_text, score_text, player_trophies,
          exit_text, play_text, defeated_text, proceed_text) = parsed
+        print('GymEnv.interpret_screen: Parsed: ', end_title_text, score_text, player_trophies,
+              exit_text, play_text, defeated_text, proceed_text)
 
         reward = 0
         terminated = False
@@ -312,7 +321,7 @@ class GymEnv(gym.Env):
 
                 (end_title_text, score_text, player_trophies,
                  exit_text, play_text, defeated_text, proceed_text) = self.parser.get_state()[1]
-                time.sleep(0.2)
+                time.sleep(0.8)
 
         return reward, terminated, info
 
@@ -376,7 +385,7 @@ class GymEnv(gym.Env):
         :return: np.ndarray. screen img
         """
         if config.terminate_program in key_check():  # exits env if the user pressed the specified key
-            self.__exit__()
+            self.__exit__(soft=False)
             exit()
 
         if not self.acting_process.is_running:  # if resume is needed
@@ -397,49 +406,54 @@ class GymEnv(gym.Env):
 
     def reset(
             self,
-            timeout=50
+            timeout=50,
+            start_battle_flag=True
     ):
         """
             Kills acting process and waits for battle to end.
             After that enters new battle and starts a new acting process
         :param timeout: num seconds to wait for battle to end
+        :param start_battle_flag: bool. whether to click Play
         :return: observation after reset
         """
-        print('environment.GymEnv.reset: reset called')
-        if not self.done:  # TODO handle idle disconnection and freezing.(Request manual help if buttons do not work)
-            patience = 0
-            while True:
-                terminated = self._interpret_parsed_screen()[1]  # if outside battle
-                if terminated:
-                    break
-                else:
-                    patience += 1
-                time.sleep(1)
-                if patience >= timeout:
-                    input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
-                    patience = 0
-        patience = 0
-        while True:  # takes some time for _interpret_parsed_screen to enter main menu
-            if self.parser.get_state()[1][4] == 'play':  # if in main menu
-                start_battle()
-                patience += 1
-            else:
-                break
-            if patience >= timeout:
-                input('Battle start timeout. Manual intervention needed.\nPress Enter when ready...')
-                patience = 0
-            time.sleep(0.2)
 
-        # TODO skip loading screen (technically it is starts here)
+        print('environment.GymEnv.reset: reset called')
+        if not self.done:
+            patience_wrapper(lambda: self._interpret_parsed_screen()[1],
+                             interval=1,
+                             timeout_steps=timeout)
+
+        patience_wrapper(lambda: self.parser.get_state()[1][4] == 'play',
+                         interval=0.2,
+                         timeout_steps=10)  # wait till play button appears
+
+        print("GymEnv.reset: entered main menu")
+        self.done = True
+
+        if not start_battle_flag:
+            return
+
+        def _start_battle():
+            if self.parser.get_state()[1][4] == 'play':
+                start_battle()
+            else:
+                return True
+        patience_wrapper(_start_battle,
+                         interval=0.2,
+                         timeout_steps=timeout)
+
+        time.sleep(8)  # skip battle prep
 
         self._init_control_process()
-        observation = self._obs_preproc(self.parser.get_state()[0])
         self.done = False
+        observation = self._obs_preproc(self.parser.get_state()[0])
         return observation
 
-    def __exit__(self, exc_type=None, exc_val=None, exc_tb=None):
+    def __exit__(self, exc_type=None, exc_val=None, exc_tb=None, soft=True):
         if self.acting_process.is_running:
             self.acting_process.exit()
+        if soft:
+            self.reset(start_battle_flag=False)
 
     def render(self, mode="human"):
         return
