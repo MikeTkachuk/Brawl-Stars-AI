@@ -270,8 +270,6 @@ class GymEnv(gym.Env):
             parsed = self.parser.get_state()[1]
         (end_title_text, score_text, player_trophies,
          exit_text, play_text, defeated_text, proceed_text) = parsed
-        print('GymEnv.interpret_screen: Parsed: ', end_title_text, score_text, player_trophies,
-              exit_text, play_text, defeated_text, proceed_text)
 
         reward = 0
         terminated = False
@@ -286,6 +284,9 @@ class GymEnv(gym.Env):
             terminated = True
             patience = 0
             while True:
+                print('GymEnv.interpret_screen: Parsed: ', end_title_text, score_text, player_trophies,
+                      exit_text, play_text, defeated_text, proceed_text)
+
                 if defeated_text == 'defeated':
                     exit_defeated()
                 elif exit_text == 'exit' or proceed_text == 'proceed':
