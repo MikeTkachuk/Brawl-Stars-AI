@@ -1,23 +1,26 @@
-from utils.grabscreen import grab_screen
-import cv2 as cv
-import numpy as np
-import config
-from config import _relative_to_pixel
-import pytesseract
 import os
+from pathlib import Path
 import time
 import re
-from utils.custom_ocr import save_templates, match
-from utils.utils import is_power_of_two
-from controls import act, reset_controls, exit_end_screen, start_battle, exit_defeated
-
-import gym
-from gym import spaces
 from typing import Optional, Union, List, Any
 from multiprocessing import Process
 from multiprocessing.sharedctypes import Value
 from ctypes import Structure, c_double
+
+import cv2 as cv
+from tqdm import tqdm
+import numpy as np
+import config
+import gym
+from gym import spaces
+import pytesseract
+
+from utils.grabscreen import grab_screen
 from utils.getkeys import key_check
+from utils.custom_ocr import save_templates, match
+from utils.utils import is_power_of_two
+from config import _relative_to_pixel
+from controls import act, reset_controls, exit_end_screen, start_battle, exit_defeated
 
 
 def _ocr_preproc(rgb_screen, region, thresh=(150, 255), erosion=7):
@@ -51,6 +54,7 @@ def patience_wrapper(func, interval=0.2, timeout_steps=50):
 
 class ScreenParser:
     """Custom visual parser of a brawl stars UI"""
+
     def __init__(self):
         # screen region helpers
         self.main_screen = config.main_screen
@@ -81,8 +85,8 @@ class ScreenParser:
         """
 
         exit_end_screen_region = _relative_to_pixel(self.exit_end_screen_region, self.main_screen)
-        exit_end_screen = _ocr_preproc(screen, exit_end_screen_region, thresh=(200, 255))
-        exit_end_screen_text = match(cv.cvtColor(exit_end_screen, cv.COLOR_RGB2GRAY), self.exit_database)
+        exit_end_screen_ = _ocr_preproc(screen, exit_end_screen_region, thresh=(200, 255))
+        exit_end_screen_text = match(cv.cvtColor(exit_end_screen_, cv.COLOR_RGB2GRAY), self.exit_database)
         if exit_end_screen_text == 'exit':  # run slow tesseract only if inside exit screen
             end_title_region = _relative_to_pixel(self.end_screen_title_region, self.main_screen)
             end_title = _ocr_preproc(screen, end_title_region)
@@ -99,8 +103,8 @@ class ScreenParser:
             score_text = ''
 
         start_battle_region = _relative_to_pixel(self.start_battle_region, self.main_screen)
-        start_battle = _ocr_preproc(screen, start_battle_region, thresh=(200, 255))
-        start_battle_text = match(cv.cvtColor(start_battle, cv.COLOR_RGB2GRAY), self.play_database)
+        start_battle_ = _ocr_preproc(screen, start_battle_region, thresh=(200, 255))
+        start_battle_text = match(cv.cvtColor(start_battle_, cv.COLOR_RGB2GRAY), self.play_database)
         if start_battle_text == 'play':  # read brawler total trophies only in the main menu
             player_trophies_region = _relative_to_pixel(self.player_trophies_region, self.main_screen)
             player_trophies = _ocr_preproc(screen, player_trophies_region)
@@ -116,7 +120,7 @@ class ScreenParser:
         proceed = _ocr_preproc(screen, proceed_region)
         proceed_text = match(cv.cvtColor(proceed, cv.COLOR_RGB2GRAY), self.proceed_database)
         return end_title_text, score_text, player_trophies_text, \
-               exit_end_screen_text, start_battle_text, defeated_text, proceed_text
+            exit_end_screen_text, start_battle_text, defeated_text, proceed_text
 
     def get_state(self):
         """
@@ -128,6 +132,38 @@ class ScreenParser:
 
         return screen, [s.lower().strip(':!. \t—\n') for s in parse_results]
 
+    def calibrate(self, out_dir, interval=1, span=60):
+        """
+        # TODO make interactive calibration with mouse input
+           - input each spot and region, capture screen upon confirmation, compare in diff setups, modify later
+           - gather train/test data for a specified zone and run threshold calibration
+        :param out_dir: path to output folder
+        :param interval: seconds per step
+        :param span: time in seconds
+        :return:
+        """
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        num_steps = int(span / interval)
+        regions = [self.end_screen_title_region, self.score_region, self.player_trophies_region,
+                   self.exit_end_screen_region, self.start_battle_region, self.defeated_region, self.proceed_region]
+        with open(out_dir/'parsed.txt', 'w') as out_file:
+            for i in tqdm(range(num_steps)):
+                screen = grab_screen(self.main_screen)
+                parsed_text = self.get_state()[1]
+                print(i, parsed_text)
+                out_file.write(f"{i}: {parsed_text}\n")
+                for region in regions:
+                    region = _relative_to_pixel(region, self.main_screen)
+                    cropper = (slice(region[1], region[1] + region[3]),
+                               slice(region[0], region[0] + region[2]))
+                    spotlight_region = _ocr_preproc(screen, region)
+                    spotlight_region = cv.resize(spotlight_region, screen[cropper].shape[:-1][::-1])
+                    screen[cropper] = 0.2 * screen[cropper] + 0.8 * spotlight_region
+                cv.imwrite(str(out_dir / f"{i}.jpg"), screen)
+                time.sleep(interval)
+
 
 class Vector(Structure):
     _fields_ = [('x', c_double), ('y', c_double)]
@@ -138,6 +174,7 @@ class ActingProcess:
     A class that handles UI controlling (keyboard and mouse)
     and uninterrupted communication with the program
     """
+
     def __init__(self, proc, shared_data=None):
         """
 
@@ -283,7 +320,7 @@ class GymEnv(gym.Env):
                 self.acting_process.exit()
             terminated = True
             patience = 0
-            while True:
+            while play_text != 'play':
                 print('GymEnv.interpret_screen: Parsed: ', end_title_text, score_text, player_trophies,
                       exit_text, play_text, defeated_text, proceed_text)
 
@@ -312,17 +349,15 @@ class GymEnv(gym.Env):
                                 raw_score = np.linspace(-8, 8, 10)[-raw_rank]
                         reward = raw_score  # TODO add score weighting based on the total trophies
                     exit_end_screen()
-                else:
-                    time.sleep(1)
-                    break
+
                 patience += 1
                 if patience > max_patience:
                     input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
                     patience = 0
 
+                time.sleep(0.2)
                 (end_title_text, score_text, player_trophies,
                  exit_text, play_text, defeated_text, proceed_text) = self.parser.get_state()[1]
-                time.sleep(0.8)
 
         return reward, terminated, info
 
@@ -336,7 +371,7 @@ class GymEnv(gym.Env):
         assert 0 <= action[0] < self.action_space.n
         bins = str(bin(int(action[0])))[2:]
         desired_len = len(str(bin(self.action_space.n - 1))) - 2
-        bins = '0'*(desired_len - len(bins)) + bins  # pad with 0
+        bins = '0' * (desired_len - len(bins)) + bins  # pad with 0
 
         make_move, make_shot, super_ability, use_gadget = bins[:4]
 
@@ -422,7 +457,7 @@ class GymEnv(gym.Env):
         if not self.done:
             patience_wrapper(lambda: self._interpret_parsed_screen()[1],
                              interval=1,
-                             timeout_steps=timeout)
+                             timeout_steps=120)  # wait at least 120 seconds
 
         patience_wrapper(lambda: self.parser.get_state()[1][4] == 'play',
                          interval=0.2,
@@ -439,6 +474,7 @@ class GymEnv(gym.Env):
                 start_battle()
             else:
                 return True
+
         patience_wrapper(_start_battle,
                          interval=0.2,
                          timeout_steps=timeout)

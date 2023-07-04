@@ -95,7 +95,7 @@ def save_templates(data_dir, crop=(0, 1), save=False, filename=None):
     return dataset
 
 
-def match(inp, db, crop=(0, 1), score_thresh=1E-4, verbose=0):
+def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0):
     """
     Main ocr func
     The dataset defines all the supported characters.

@@ -78,8 +78,8 @@ def _relative_to_pixel(point, main_scr, absolute=False):
         return out
 
 
-end_screen_title_region = to_relative((55, 55, 360, 120))
-score_region = to_relative((117, 177, 80, 45))
+end_screen_title_region = to_relative((25, 55, 390, 120))
+score_region = to_relative((90, 167, 80, 45))
 player_trophies_region = to_relative((629, 148, 64, 30))
 
 exit_end_screen_region = to_relative((1185, 740, 80, 40))
