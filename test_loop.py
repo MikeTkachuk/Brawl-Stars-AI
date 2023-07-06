@@ -9,18 +9,6 @@ import config
 
 import time
 
-"""
-A TODO list:
-
-- 
-- environment class with state reward (if not battle reward present - compute internally) functionality + end/start battle control
-- create a mapping from dir vector to a sequence of key controls, experiment with latency
-- create mouse control function to change position in radial coordinates
-- add action derivatives to act function
-- finalize act function
-- standardize whole model latency to make the game discrete interval MDP (perhaps make it a continuous transition idk how)
-- run dummy model
-"""
 
 parser = ScreenParser()
 env = GymEnv(parser=parser)
@@ -83,7 +71,6 @@ def run_loop():
             env.__exit__()
             break
         time.sleep(0.05)
-        # print(paused)
 
 
 if __name__ == '__main__':

@@ -167,7 +167,6 @@ def shooting_routine(old, new):
 
     # if mouse is not clicked or no change in joysticks, do the job
     if make_shot[0] or super_ability[0] == super_ability[1]:
-        # print('case NO CHANGE')
         if make_shot[0]:
             mouse.move(*_relative_to_pixel(joystick, config.main_screen, absolute=True),
                        duration=movement_duration)  # move to init location if released
@@ -176,7 +175,6 @@ def shooting_routine(old, new):
             time.sleep(movement_duration)
             mouse.release()
     else:  # if already aiming at different joystick
-        # print('case RESET')
         _reset_joystick(prev_joystick)
         mouse.move(*_relative_to_pixel(joystick, config.main_screen, absolute=True),
                    duration=movement_duration)  # move to init location
