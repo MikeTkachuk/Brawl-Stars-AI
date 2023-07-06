@@ -320,6 +320,7 @@ class GymEnv(gym.Env):
                 self.acting_process.exit()
             terminated = True
             patience = 0
+            reward_scan_patience = 0
             while play_text != 'play':
                 print('GymEnv.interpret_screen: Parsed: ', end_title_text, score_text, player_trophies,
                       exit_text, play_text, defeated_text, proceed_text)
@@ -327,10 +328,11 @@ class GymEnv(gym.Env):
                 if defeated_text == 'defeated':
                     exit_defeated()
                 elif exit_text == 'exit' or proceed_text == 'proceed':
+                    got_reward = True
                     if score_text:
                         reward = float(score_text)
                     else:
-                        raw_score = 0  # TODO remove
+                        raw_score = 0
                         if end_title_text in ['defeat', 'victory', 'draw']:
                             if end_title_text == 'defeat':
                                 raw_score = -8
@@ -339,16 +341,20 @@ class GymEnv(gym.Env):
                             else:
                                 raw_score = 0
 
-                        else:
-                            if 'rank' in end_title_text:
-                                raw_rank = int(''.join(re.findall('[0-9]', end_title_text.replace('rank', ''))))
-                                raw_score = np.linspace(-8, 8, 10)[-raw_rank]
+                        elif 'rank' in end_title_text:
+                            raw_rank = int(''.join(re.findall('[0-9]', end_title_text.replace('rank', ''))))
+                            raw_score = np.linspace(-8, 8, 10)[-raw_rank]
 
-                            if 'you are' in end_title_text:
-                                raw_rank = 1
-                                raw_score = np.linspace(-8, 8, 10)[-raw_rank]
+                        elif 'you are' in end_title_text:
+                            raw_rank = 1
+                            raw_score = np.linspace(-8, 8, 10)[-raw_rank]
+                        else:
+                            got_reward = False
                         reward = raw_score  # TODO add score weighting based on the total trophies
-                    exit_end_screen()
+                    if got_reward or reward_scan_patience > 5:
+                        exit_end_screen()
+                    else:
+                        reward_scan_patience += 1
 
                 patience += 1
                 if patience > max_patience:
