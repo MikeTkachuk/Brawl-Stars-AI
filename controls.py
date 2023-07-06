@@ -73,12 +73,36 @@ def stop_movement():
     ReleaseKey(config.left)
 
 
+def reset_controls():
+    stop_movement()
+    mouse.release()
+
+
 def start_battle():
-    pass
+    print('controls.start_battle: start func')
+    mouse.release()
+    mouse.move(*_relative_to_pixel(config.click_play, config.main_screen, absolute=True))
+    mouse.click()
 
 
 def exit_end_screen():
-    pass
+    print('controls.exit_end_screen: exit func')
+    mouse.release()
+    mouse.move(*_relative_to_pixel(config.click_exit_proceed, config.main_screen, absolute=True))
+    mouse.click()
+
+
+def exit_defeated():
+    print('controls.exit_defeated: exit def func')
+    mouse.release()
+    mouse.move(*_relative_to_pixel(config.click_defeated, config.main_screen, absolute=True))
+    mouse.click()
+
+
+def idle_click():
+    mouse.release()
+    mouse.move(*_relative_to_pixel(config.click_idle, config.main_screen, absolute=True))
+    mouse.click()
 
 
 # assemble anchor directions and their corresponding controls
@@ -103,6 +127,16 @@ def generate_dir(direction):
 
 
 def shooting_routine(old, new):
+    """
+        Handles Brawl Stars specific mouse controls on two joysticks (regular and super).
+        The order of checks is as follows:
+        1) if made shot previously -> press, drag and do the action
+        2) if not made shot but on the same joystick -> drag and do the action
+        3) if not made shot and on a different joystick -> change joystick, press, drag and do the action
+    :param old: aiming state before action
+    :param new: new aiming instructions
+    :return:
+    """
     movement_duration = 0.05
 
     def _press_move(center, dir_xy, strength):
@@ -132,9 +166,7 @@ def shooting_routine(old, new):
     prev_joystick = config.super_joystick if super_ability[0] else config.regular_joystick
 
     # if mouse is not clicked or no change in joysticks, do the job
-    print(mouse.is_pressed())
     if make_shot[0] or super_ability[0] == super_ability[1]:
-        print('case NO CHANGE')
         if make_shot[0]:
             mouse.move(*_relative_to_pixel(joystick, config.main_screen, absolute=True),
                        duration=movement_duration)  # move to init location if released
@@ -143,7 +175,6 @@ def shooting_routine(old, new):
             time.sleep(movement_duration)
             mouse.release()
     else:  # if already aiming at different joystick
-        print('case RESET')
         _reset_joystick(prev_joystick)
         mouse.move(*_relative_to_pixel(joystick, config.main_screen, absolute=True),
                    duration=movement_duration)  # move to init location
@@ -165,6 +196,7 @@ def act(
 ):
     """
     Run an action. Use shared states to change the action during the run. Runs an infinite loop
+    Every time action values are updated, shooting_routine is called, then updated movement is performed
 
     :param direction: float (x, y), movement vector, will be normalized
     :param make_move: int bool-like, whether to move
@@ -179,10 +211,7 @@ def act(
     :return:
     """
 
-    # TODO implement mouse radial movement (based on difference
-    #  in shoot_directions), clone for each of the shooting modes
     # TODO calculate shoot_strength => pixel distance. Add to config?
-    # TODO make super <=> not super mode change via proper control release (spot if changed)
 
     # how to aim inter-frame?
     # make shot inter-frame?
@@ -275,7 +304,6 @@ def act(
                 changed.value = 0
             movement_controls = init()
 
-        # if np.random.uniform() > 0.9997: print('im here', len(movement_controls))
         for func in movement_controls:
             func()
             time.sleep(0.1)

@@ -1,10 +1,11 @@
 import warnings
 import cv2 as cv
 import numpy as np
-import matplotlib.pyplot as plt
 import os
 import json
 import pyefd
+
+from pathlib import Path
 
 
 def _parse_sample(img, crop=(0, 1)):
@@ -57,12 +58,14 @@ def sort(cnt):
     return sorted(cnt, key=lambda x: _cnt_xloc(x))
 
 
-def save_templates(data_dir, crop=(0, 1)):
+def save_templates(data_dir, crop=(0, 1), save=False, filename=None):
     """
     Create a dataset from a directory of images, the names of which contain true labels.
     e.x. a sample img containing the '2+2=4' symbols should be named like 2+2=4.png
     :param data_dir: path to dir with gt images
     :param crop: (float, float) representing what vertical crop should be applied to images. default (0,1)
+    :param save: bool. saves as json if True into ../filename
+    :param filename: str. if None - Path(data_dir).name + '.json' will be used. default None
     :return: dictionary of characters and their fourier parameters of order 10
     """
     dataset = {}
@@ -82,12 +85,17 @@ def save_templates(data_dir, crop=(0, 1)):
             )
             rot = transforms[1] if label in ['1', '-'] else 0
             dataset[label] = {'cnt': c_fourier.tolist(), 'skew': vertical_skew, 'rot': rot}
-    with open('../dataset.json', 'w') as f:
-        json.dump(dataset, f)
+    if save:
+        if filename is None:
+            json_path = Path('../') / (Path(data_dir).name + '.json')
+        else:
+            json_path = Path('../') / filename
+        with open(json_path, 'w') as f:
+            json.dump(dataset, f)
     return dataset
 
 
-def match(inp, db, crop=(0, 1), score_thresh=1E-4, verbose=0):
+def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0):
     """
     Main ocr func
     The dataset defines all the supported characters.

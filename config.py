@@ -21,6 +21,8 @@ right = 32
 
 gadget = 33
 
+terminate_program = 'Q'  # press Q to terminate everything with exit()
+
 # ===============
 # screen locations config
 # regions of form (x, y, width, height)
@@ -28,7 +30,7 @@ gadget = 33
 # ===============
 
 # --- main screen absolute size ---
-main_screen = (0, 41, 1388, 781)  # absolute. Should be changed in case of main screen displacement
+main_screen = (0, 41, 1388, 781)  # absolute. The only thing that should be changed in case of main screen displacement
 
 # do NOT change without full recalibration
 ref_main_screen = (0, 41, 1388, 781)    # to fix the relative calculations.
@@ -76,8 +78,8 @@ def _relative_to_pixel(point, main_scr, absolute=False):
         return out
 
 
-end_screen_title_region = to_relative((55, 55, 360, 120))
-score_region = to_relative((117, 177, 80, 45))
+end_screen_title_region = to_relative((25, 55, 390, 120))
+score_region = to_relative((90, 167, 80, 45))
 player_trophies_region = to_relative((629, 148, 64, 30))
 
 exit_end_screen_region = to_relative((1185, 740, 80, 40))
@@ -85,6 +87,10 @@ start_battle_region = to_relative((1140, 720, 120, 50))
 proceed_region = to_relative((1155, 742, 143, 39))
 defeated_region = to_relative((530, 200, 330, 80))
 
+click_defeated = to_relative((696, 764))
+click_exit_proceed = to_relative((1225, 760))
+click_play = to_relative((1200, 745))
+click_idle = to_relative((1200, 400))
 
 regular_joystick = to_relative((1244,614))
 super_joystick = to_relative((1088, 677))
