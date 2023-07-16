@@ -7,7 +7,7 @@ The implementation key-words are:
 - mouse and keyboard control
 - real-time static ocr
 
-![](assets\eve_showdown_example.gif)
+![](assets/eve_showdown_example.gif)
 
 Refer to https://github.com/MikeTkachuk/Brawl_iris for modelling implementation.
 
