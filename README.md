@@ -7,14 +7,16 @@ The implementation key-words are:
 - mouse and keyboard control
 - real-time static ocr
 
+![](assets\eve_showdown_example.gif)
+
 Refer to https://github.com/MikeTkachuk/Brawl_iris for modelling implementation.
 
 
-#### Ideas:
+### Ideas:
 
 **General:**
-- collect data straight to disk (currently into RAM)
-- 
+- add episode health check (not frozen)
+- fix env reset in real fights
 
 **Speed-up:**
 - fp16 precision
