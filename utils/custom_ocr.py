@@ -6,6 +6,7 @@ import json
 import pyefd
 
 from pathlib import Path
+BASE_THRESH = 1.2E-4
 
 
 def _parse_sample(img, crop=(0, 1)):
@@ -70,13 +71,16 @@ def save_templates(data_dir, crop=(0, 1), save=False, filename=None):
     """
     dataset = {}
     for file in _get_filenames(data_dir):
-        gt = list(os.path.split(file)[-1].split('.')[0])
+        gt = os.path.split(file)[-1].split('.')[0]
+        gt = gt.split('_')[0]  # ignore comments after _
+        gt = gt.replace(' ', '')
+        gt = list(gt)
         img = cv.imread(file)
         img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
         img, cnt = _parse_sample(img, crop=crop)
         for label, c in zip(gt, sort(cnt)):
             # save skew direction if flip matters
-            vertical_skew = np.sign(_contour_skew(c)[1]) if label in ['2', '5', '6', '9'] else 0
+            vertical_skew = np.sign(_contour_skew(c)[1]) if label in ['2', '5', '6', '9', 'n', 'u'] else 0
 
             c_fourier, transforms = pyefd.elliptic_fourier_descriptors(
                 c.reshape(-1, 2),
@@ -84,7 +88,16 @@ def save_templates(data_dir, crop=(0, 1), save=False, filename=None):
                 return_transformation=True
             )
             rot = transforms[1] if label in ['1', '-'] else 0
-            dataset[label] = {'cnt': c_fourier.tolist(), 'skew': vertical_skew, 'rot': rot}
+
+            if label not in dataset:
+                dataset[label] = {'cnt': [c_fourier.tolist()], 'skew': [vertical_skew], 'rot': [rot]}
+            else:
+                if _match_score(c_fourier, dataset[label]['cnt'],
+                                rot if rot != 0 else None, dataset[label]['rot']) > BASE_THRESH:
+                    dataset[label]['cnt'].append(c_fourier.tolist())
+                    dataset[label]['skew'].append(vertical_skew)
+                    dataset[label]['rot'].append(rot)
+
     if save:
         if filename is None:
             json_path = Path('../') / (Path(data_dir).name + '.json')
@@ -93,6 +106,14 @@ def save_templates(data_dir, crop=(0, 1), save=False, filename=None):
         with open(json_path, 'w') as f:
             json.dump(dataset, f)
     return dataset
+
+
+def _match_score(cf1, cf2, rot1=None, rot2=None):
+    score = np.mean(np.square(cf1 - cf2))
+    if rot1 is not None and rot2 is not None:
+        angular_score = _angle_divergence(rot1, rot2) ** 2
+        score += angular_score
+    return score
 
 
 def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0):
@@ -125,15 +146,17 @@ def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0):
             return_transformation=True
         )
         for ch in db.keys():
-            if db[ch]['skew'] != 0 and c_skew != db[ch]['skew']:  # skip if skew matters and does not match
-                continue
+            for i in range(len(db[ch]['cnt'])):
+                if db[ch]['skew'][i] != 0 and c_skew != db[ch]['skew'][i]:  # skip if skew matters and does not match
+                    continue
 
-            chars.append(ch)
+                chars.append(ch)
+                score = _match_score(c_fourier,
+                                     db[ch]['cnt'][i],
+                                     db[ch]['rot'][i] if db[ch]['rot'][i] != 0 else None,
+                                     transforms[1])
 
-            score = np.mean(np.square(c_fourier - db[ch]['cnt']))
-            angular_score = _angle_divergence(db[ch]['rot'], transforms[1]) ** 2 if db[ch]['rot'] != 0 else 0
-
-            scores.append(score + angular_score)
+                scores.append(score)
         min_id = np.argmin(scores)
         if verbose > 0:
             print(dict(zip(chars, scores)))

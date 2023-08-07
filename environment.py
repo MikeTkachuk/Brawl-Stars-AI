@@ -18,16 +18,18 @@ import pytesseract
 from utils.grabscreen import grab_screen
 from utils.getkeys import key_check
 from utils.custom_ocr import save_templates, match
-from utils.utils import is_power_of_two
+from utils.misc import is_power_of_two
 from config import _relative_to_pixel
 from controls import act, reset_controls, exit_end_screen, start_battle, exit_defeated
 
 
-def _ocr_preproc(rgb_screen, region, thresh=(150, 255), erosion=7):
+def _ocr_preproc(rgb_screen, region, thresh=(140, 255), erosion=7, invert=False):
     # region in xywh
     cropper = (slice(region[1], region[1] + region[3]),
                slice(region[0], region[0] + region[2]))
     rgb_region = rgb_screen[cropper]
+    if invert:
+        rgb_region = 255 - rgb_region
 
     if min(rgb_region.shape[:2]) < 240:
         scale = 240 / min(rgb_region.shape[:2])
@@ -69,7 +71,7 @@ class ScreenParser:
         self.proceed_region = config.proceed_region
 
         # init ocr
-        pytesseract.pytesseract.tesseract_cmd = config.tesseract_cmd
+        self.end_title_database = save_templates(config.end_title_database)
         self.digit_database = save_templates(config.digit_database, crop=(3 / 32, 9 / 16))
         self.digit_signed_database = save_templates(config.digit_signed_database, crop=(3 / 32, 9 / 16))
         self.exit_database = save_templates(config.exit_database)
@@ -92,7 +94,7 @@ class ScreenParser:
             end_title = _ocr_preproc(screen, end_title_region)
 
             # tesseract ocr params were found by brute force
-            end_title_text = pytesseract.image_to_string(end_title, config='--psm 8')
+            end_title_text = match(cv.cvtColor(end_title, cv.COLOR_RGB2GRAY), self.end_title_database)
 
             # read end screen score
             score_region = _relative_to_pixel(self.score_region, self.main_screen)
@@ -142,6 +144,8 @@ class ScreenParser:
         :param span: time in seconds
         :return:
         """
+        time.sleep(2)
+
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -150,8 +154,7 @@ class ScreenParser:
                    self.exit_end_screen_region, self.start_battle_region, self.defeated_region, self.proceed_region]
         with open(out_dir/'parsed.txt', 'w') as out_file:
             for i in tqdm(range(num_steps)):
-                screen = grab_screen(self.main_screen)
-                parsed_text = self.get_state()[1]
+                screen, parsed_text = self.get_state()
                 print(i, parsed_text)
                 out_file.write(f"{i}: {parsed_text}\n")
                 for region in regions:
@@ -161,7 +164,7 @@ class ScreenParser:
                     spotlight_region = _ocr_preproc(screen, region)
                     spotlight_region = cv.resize(spotlight_region, screen[cropper].shape[:-1][::-1])
                     screen[cropper] = 0.2 * screen[cropper] + 0.8 * spotlight_region
-                cv.imwrite(str(out_dir / f"{i}.jpg"), screen)
+                cv.imwrite(str(out_dir / f"{i}.jpg"), screen[..., ::-1])
                 time.sleep(interval)
 
 
@@ -333,19 +336,23 @@ class GymEnv(gym.Env):
                         reward = float(score_text)
                     else:
                         raw_score = 0
-                        if end_title_text in ['defeat', 'victory', 'draw']:
-                            if end_title_text == 'defeat':
+                        if any(txt in end_title_text for txt in ['defeat', 'victory', 'draw']):
+                            if 'defeat' in end_title_text:
                                 raw_score = -8
-                            elif end_title_text == 'victory':
+                            elif 'victory' in end_title_text:
                                 raw_score = 8
                             else:
                                 raw_score = 0
 
                         elif 'rank' in end_title_text:
-                            raw_rank = int(''.join(re.findall('[0-9]', end_title_text.replace('rank', ''))))
-                            raw_score = np.linspace(-8, 8, 10)[-raw_rank]
+                            raw_rank = ''.join(re.findall('[0-9]', end_title_text.replace('rank', '')))
+                            if not raw_rank:
+                                raw_score = 0
+                            else:
+                                raw_rank = int(raw_rank)
+                                raw_score = np.linspace(-8, 8, 10)[-raw_rank]
 
-                        elif 'you are' in end_title_text:
+                        elif 'youare' in end_title_text or 'yourteam' in end_title_text:
                             raw_rank = 1
                             raw_score = np.linspace(-8, 8, 10)[-raw_rank]
                         else:
@@ -361,7 +368,7 @@ class GymEnv(gym.Env):
                     input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
                     patience = 0
 
-                time.sleep(0.2)
+                time.sleep(0.4)
                 (end_title_text, score_text, player_trophies,
                  exit_text, play_text, defeated_text, proceed_text) = self.parser.get_state()[1]
 
@@ -407,7 +414,7 @@ class GymEnv(gym.Env):
         return parsed_action
 
     def _obs_preproc(self, obs):
-        return cv.resize(obs, (256, 256)).astype(np.float32)
+        return cv.resize(obs, (192, 192)).astype(np.float32)
 
     def step(self, action: Union[dict, Any]):
         """
@@ -485,9 +492,8 @@ class GymEnv(gym.Env):
                          interval=0.2,
                          timeout_steps=timeout)
 
-        time.sleep(8)  # skip battle prep
-
         self._init_control_process()
+        time.sleep(10)  # skip battle prep
         self.done = False
         observation = self._obs_preproc(self.parser.get_state()[0])
         return observation
