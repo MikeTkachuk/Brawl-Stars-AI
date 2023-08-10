@@ -94,7 +94,8 @@ class ScreenParser:
             end_title = _ocr_preproc(screen, end_title_region)
 
             # tesseract ocr params were found by brute force
-            end_title_text = match(cv.cvtColor(end_title, cv.COLOR_RGB2GRAY), self.end_title_database)
+            end_title_text = match(cv.cvtColor(end_title, cv.COLOR_RGB2GRAY),
+                                   self.end_title_database, score_thresh=3.5E-4)
 
             # read end screen score
             score_region = _relative_to_pixel(self.score_region, self.main_screen)
@@ -122,7 +123,7 @@ class ScreenParser:
         proceed = _ocr_preproc(screen, proceed_region)
         proceed_text = match(cv.cvtColor(proceed, cv.COLOR_RGB2GRAY), self.proceed_database)
         return end_title_text, score_text, player_trophies_text, \
-            exit_end_screen_text, start_battle_text, defeated_text, proceed_text
+               exit_end_screen_text, start_battle_text, defeated_text, proceed_text
 
     def get_state(self):
         """
@@ -152,7 +153,7 @@ class ScreenParser:
         num_steps = int(span / interval)
         regions = [self.end_screen_title_region, self.score_region, self.player_trophies_region,
                    self.exit_end_screen_region, self.start_battle_region, self.defeated_region, self.proceed_region]
-        with open(out_dir/'parsed.txt', 'w') as out_file:
+        with open(out_dir / 'parsed.txt', 'w') as out_file:
             for i in tqdm(range(num_steps)):
                 screen, parsed_text = self.get_state()
                 print(i, parsed_text)
@@ -166,6 +167,17 @@ class ScreenParser:
                     screen[cropper] = 0.2 * screen[cropper] + 0.8 * spotlight_region
                 cv.imwrite(str(out_dir / f"{i}.jpg"), screen[..., ::-1])
                 time.sleep(interval)
+
+    def save_region(self, region: Union[str, Any], file_path=None):
+        if isinstance(region, str):
+            region = getattr(self, region)
+        screen = self.get_state()[0]
+        region = _relative_to_pixel(region, self.main_screen)
+        spotlight_region = _ocr_preproc(screen, region)
+        if file_path is None:
+            file_path = Path(__file__).parent / 'testing/from_run' / f"{hash(time.time())}.png"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+        cv.imwrite(str(file_path), spotlight_region)
 
 
 class Vector(Structure):
@@ -344,7 +356,7 @@ class GymEnv(gym.Env):
                             else:
                                 raw_score = 0
 
-                        elif 'rank' in end_title_text:
+                        elif re.match('.*rank.*\d+', end_title_text):
                             raw_rank = ''.join(re.findall('[0-9]', end_title_text.replace('rank', '')))
                             if not raw_rank:
                                 raw_score = 0
@@ -359,6 +371,8 @@ class GymEnv(gym.Env):
                             got_reward = False
                         reward = raw_score  # TODO add score weighting based on the total trophies
                     if got_reward or reward_scan_patience > 5:
+                        if reward_scan_patience > 5:
+                            self.parser.save_region(region='end_screen_title_region')
                         exit_end_screen()
                     else:
                         reward_scan_patience += 1

@@ -6,6 +6,7 @@ import json
 import pyefd
 
 from pathlib import Path
+
 BASE_THRESH = 1.2E-4
 
 
@@ -92,8 +93,10 @@ def save_templates(data_dir, crop=(0, 1), save=False, filename=None):
             if label not in dataset:
                 dataset[label] = {'cnt': [c_fourier.tolist()], 'skew': [vertical_skew], 'rot': [rot]}
             else:
-                if _match_score(c_fourier, dataset[label]['cnt'],
-                                rot if rot != 0 else None, dataset[label]['rot']) > BASE_THRESH:
+                similarity = [_match_score(c_fourier, dataset[label]['cnt'][i],
+                                           rot if rot != 0 else None, dataset[label]['rot'][i])
+                              for i in range(len(dataset[label]['cnt']))]
+                if all(np.greater(similarity, BASE_THRESH)):
                     dataset[label]['cnt'].append(c_fourier.tolist())
                     dataset[label]['skew'].append(vertical_skew)
                     dataset[label]['rot'].append(rot)
@@ -147,7 +150,8 @@ def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0):
         )
         for ch in db.keys():
             for i in range(len(db[ch]['cnt'])):
-                if db[ch]['skew'][i] != 0 and c_skew != db[ch]['skew'][i]:  # skip if skew matters and does not match
+                if db[ch]['skew'][i] != 0 and c_skew not in [0.0, db[ch]['skew'][
+                    i]]:  # skip if skew matters and does not match
                     continue
 
                 chars.append(ch)
@@ -163,3 +167,22 @@ def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0):
         if scores[min_id] < score_thresh:
             out += chars[min_id]
     return out
+
+
+def learned_comparison(x1, x2):
+    diff = np.sqrt(1000) * (x1 - x2)
+    diff = diff.reshape(-1)
+    weights = np.array([-1.0000e+00, -1.0000e+00, -1.0000e+00, -4.3289e+00,
+                        -5.0549e-01, -5.0598e-01, -4.3815e-01, -4.4509e-01,
+                        -4.3521e-01, -4.8219e-01, -5.9286e-01, -7.8976e-01,
+                        -3.0901e-02, -1.4133e-01, -5.3326e-02, -1.9868e-01,
+                        -5.8596e-02, -7.4078e-02, 4.7613e-02, -6.2624e-02,
+                        -1.3891e-01, -1.2226e-01, -3.3368e-03, 4.4394e-02,
+                        1.1403e-01, 2.6991e-02, 1.2110e-01, 1.0116e-01,
+                        1.5295e-01, 1.0566e-01, 2.8567e-01, 2.7430e-01,
+                        2.6891e-01, 3.0749e-01, 5.1849e-01, 5.2175e-01,
+                        4.1152e-01, 3.7644e-01, 5.7100e-01, 5.7538e-01])
+    bias = 2.1269
+
+    match_ = np.mean(diff * weights) + bias
+    return match_ > 0

@@ -32,5 +32,5 @@ if __name__ == '__main__':
     screen = grab_screen(config.main_screen)
     add_region_template(screen,
                         config.end_screen_title_region,
-                        r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\end_title\VICTORY.png",
+                        r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\testing\Rank4_1.png",
                         )
