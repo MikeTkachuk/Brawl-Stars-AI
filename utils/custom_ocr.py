@@ -7,17 +7,13 @@ import pyefd
 
 from pathlib import Path
 
-BASE_THRESH = 1.2E-4
+BASE_THRESH = -1.5
 
 
 def _parse_sample(img, crop=(0, 1)):
     img = img[:, int(img.shape[1] * crop[0]):int(img.shape[1] * crop[1])]  # crop
     cnt, hierarchy = cv.findContours(img, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)  # chain approx simple breaks pyefd
     return img, cnt
-
-
-def _get_filenames(dir_):
-    return [os.path.join(dir_, f) for f in os.walk(dir_).__next__()[-1]]
 
 
 def _contour_skew(cnt):
@@ -71,12 +67,12 @@ def save_templates(data_dir, crop=(0, 1), save=False, filename=None):
     :return: dictionary of characters and their fourier parameters of order 10
     """
     dataset = {}
-    for file in _get_filenames(data_dir):
-        gt = os.path.split(file)[-1].split('.')[0]
+    for file in Path(data_dir).rglob('*.png'):
+        gt = file.stem
         gt = gt.split('_')[0]  # ignore comments after _
         gt = gt.replace(' ', '')
         gt = list(gt)
-        img = cv.imread(file)
+        img = cv.imread(str(file))
         img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
         img, cnt = _parse_sample(img, crop=crop)
         for label, c in zip(gt, sort(cnt)):
@@ -119,7 +115,7 @@ def _match_score(cf1, cf2, rot1=None, rot2=None):
     return score
 
 
-def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0):
+def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0, mode='learned'):
     """
     Main ocr func
     The dataset defines all the supported characters.
@@ -150,15 +146,18 @@ def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0):
         )
         for ch in db.keys():
             for i in range(len(db[ch]['cnt'])):
-                if db[ch]['skew'][i] != 0 and c_skew not in [0.0, db[ch]['skew'][
-                    i]]:  # skip if skew matters and does not match
+                if db[ch]['skew'][i] != 0 and c_skew not in [0.0, db[ch]['skew'][i]]:
+                    # skip if skew matters and does not match
                     continue
 
                 chars.append(ch)
-                score = _match_score(c_fourier,
-                                     db[ch]['cnt'][i],
-                                     db[ch]['rot'][i] if db[ch]['rot'][i] != 0 else None,
-                                     transforms[1])
+                if mode == 'learned':
+                    score = learned_comparison(c_fourier, db[ch]['cnt'][i])
+                else:
+                    score = _match_score(c_fourier,
+                                         db[ch]['cnt'][i],
+                                         db[ch]['rot'][i] if db[ch]['rot'][i] != 0 else None,
+                                         transforms[1])
 
                 scores.append(score)
         min_id = np.argmin(scores)
@@ -169,9 +168,13 @@ def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0):
     return out
 
 
-def learned_comparison(x1, x2):
+def learned_comparison(x1, x2, clip=True):
+    x1 = np.array(x1)
+    x2 = np.array(x2)
+    if x1.shape[-1] != 40:
+        x1 = x1.reshape(*x1.shape[:-2], -1)
+        x2 = x2.reshape(*x2.shape[:-2], -1)
     diff = np.sqrt(1000) * (x1 - x2)
-    diff = diff.reshape(-1)
     weights = np.array([-1.0000e+00, -1.0000e+00, -1.0000e+00, -4.3289e+00,
                         -5.0549e-01, -5.0598e-01, -4.3815e-01, -4.4509e-01,
                         -4.3521e-01, -4.8219e-01, -5.9286e-01, -7.8976e-01,
@@ -182,7 +185,9 @@ def learned_comparison(x1, x2):
                         1.5295e-01, 1.0566e-01, 2.8567e-01, 2.7430e-01,
                         2.6891e-01, 3.0749e-01, 5.1849e-01, 5.2175e-01,
                         4.1152e-01, 3.7644e-01, 5.7100e-01, 5.7538e-01])
+    if clip:
+        weights = weights.clip(max=0.0)
     bias = 2.1269
 
-    match_ = np.mean(diff * weights) + bias
-    return match_ > 0
+    match_ = np.mean(weights * diff ** 2, axis=-1) + bias
+    return -match_

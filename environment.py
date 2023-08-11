@@ -13,7 +13,6 @@ import numpy as np
 import config
 import gym
 from gym import spaces
-import pytesseract
 
 from utils.grabscreen import grab_screen
 from utils.getkeys import key_check
@@ -71,13 +70,7 @@ class ScreenParser:
         self.proceed_region = config.proceed_region
 
         # init ocr
-        self.end_title_database = save_templates(config.end_title_database)
-        self.digit_database = save_templates(config.digit_database, crop=(3 / 32, 9 / 16))
-        self.digit_signed_database = save_templates(config.digit_signed_database, crop=(3 / 32, 9 / 16))
-        self.exit_database = save_templates(config.exit_database)
-        self.play_database = save_templates(config.play_database)
-        self.defeated_database = save_templates(config.defeated_database)
-        self.proceed_database = save_templates(config.proceed_database)
+        self.char_database = save_templates(config.char_database)
 
     def _parse_screen(self, screen):
         """
@@ -88,40 +81,39 @@ class ScreenParser:
 
         exit_end_screen_region = _relative_to_pixel(self.exit_end_screen_region, self.main_screen)
         exit_end_screen_ = _ocr_preproc(screen, exit_end_screen_region, thresh=(200, 255))
-        exit_end_screen_text = match(cv.cvtColor(exit_end_screen_, cv.COLOR_RGB2GRAY), self.exit_database)
+        exit_end_screen_text = match(cv.cvtColor(exit_end_screen_, cv.COLOR_RGB2GRAY), self.char_database)
         if exit_end_screen_text == 'exit':  # run slow tesseract only if inside exit screen
             end_title_region = _relative_to_pixel(self.end_screen_title_region, self.main_screen)
             end_title = _ocr_preproc(screen, end_title_region)
 
             # tesseract ocr params were found by brute force
-            end_title_text = match(cv.cvtColor(end_title, cv.COLOR_RGB2GRAY),
-                                   self.end_title_database, score_thresh=3.5E-4)
+            end_title_text = match(cv.cvtColor(end_title, cv.COLOR_RGB2GRAY), self.char_database)
 
             # read end screen score
             score_region = _relative_to_pixel(self.score_region, self.main_screen)
             score = _ocr_preproc(screen, score_region)
-            score_text = match(cv.cvtColor(score, cv.COLOR_RGB2GRAY), self.digit_signed_database)
+            score_text = match(cv.cvtColor(score, cv.COLOR_RGB2GRAY), self.char_database)
         else:
             end_title_text = ''
             score_text = ''
 
         start_battle_region = _relative_to_pixel(self.start_battle_region, self.main_screen)
         start_battle_ = _ocr_preproc(screen, start_battle_region, thresh=(200, 255))
-        start_battle_text = match(cv.cvtColor(start_battle_, cv.COLOR_RGB2GRAY), self.play_database)
+        start_battle_text = match(cv.cvtColor(start_battle_, cv.COLOR_RGB2GRAY), self.char_database)
         if start_battle_text == 'play':  # read brawler total trophies only in the main menu
             player_trophies_region = _relative_to_pixel(self.player_trophies_region, self.main_screen)
             player_trophies = _ocr_preproc(screen, player_trophies_region)
-            player_trophies_text = match(cv.cvtColor(player_trophies, cv.COLOR_RGB2GRAY), self.digit_database)
+            player_trophies_text = match(cv.cvtColor(player_trophies, cv.COLOR_RGB2GRAY), self.char_database)
         else:
             player_trophies_text = ''
 
         defeated_region = _relative_to_pixel(self.defeated_region, self.main_screen)
         defeated = _ocr_preproc(screen, defeated_region)
-        defeated_text = match(cv.cvtColor(defeated, cv.COLOR_RGB2GRAY), self.defeated_database)
+        defeated_text = match(cv.cvtColor(defeated, cv.COLOR_RGB2GRAY), self.char_database)
 
         proceed_region = _relative_to_pixel(self.proceed_region, self.main_screen)
         proceed = _ocr_preproc(screen, proceed_region)
-        proceed_text = match(cv.cvtColor(proceed, cv.COLOR_RGB2GRAY), self.proceed_database)
+        proceed_text = match(cv.cvtColor(proceed, cv.COLOR_RGB2GRAY), self.char_database)
         return end_title_text, score_text, player_trophies_text, \
                exit_end_screen_text, start_battle_text, defeated_text, proceed_text
 
@@ -255,7 +247,7 @@ class GymEnv(gym.Env):
         self.parser = parser
         self.acting_process: ActingProcess = None
         self.done = False
-        self.move_shot_anchors = move_shot_anchors if isinstance(move_shot_anchors, tuple) else (move_shot_anchors,) * 2
+        self.move_shot_anchors = move_shot_anchors if hasattr(move_shot_anchors, "__len__") else (move_shot_anchors,) * 2
         if not is_power_of_two(self.move_shot_anchors[0]) or not is_power_of_two(self.move_shot_anchors[1]):
             raise ValueError('Num anchors that is not a power of 2 is not allowed.')
 
@@ -522,5 +514,5 @@ class GymEnv(gym.Env):
         return
 
 
-def make_env():
-    return GymEnv(ScreenParser(), )
+def make_env(*args, **kwargs):
+    return GymEnv(ScreenParser(), *args, **kwargs)

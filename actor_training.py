@@ -102,8 +102,10 @@ class ACTrainer:
         # sample action from s_t
         output = self.actor.forward(torch.tensor(self.observations[-1].transpose(2, 0, 1)).unsqueeze(0).float() / 255.0)
 
-        action_dist = Categorical(logits=output.logits_actions)
-        action = action_dist.sample().flatten()
+        topk = torch.topk(output.logits_actions, k=4, dim=-1)
+        action_dist = Categorical(logits=output.logits_actions[..., topk.indices.flatten()])
+
+        action = topk.indices.flatten()[action_dist.sample()].flatten()
         action_cont_dist = Normal(output.mean_continuous, output.std_continuous)
         action_cont = action_cont_dist.sample().flatten()
         action_raw = torch.cat([action, action_cont]).unsqueeze(0)
@@ -150,7 +152,7 @@ class ACTrainer:
 def main(cfg: DictConfig):
     trainer = Trainer(cfg)
 
-    env = make_env()
+    env = trainer.train_collector.env.env
     actor = trainer.agent.actor_critic
     optimizer = trainer.optimizer_actor_critic
     ac_trainer = ACTrainer(env, actor, optimizer)

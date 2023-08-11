@@ -1,4 +1,3 @@
-pytesseract
 pyefd==1.6.0
 gym==0.21.0
 numpy==1.24.2

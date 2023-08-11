@@ -111,32 +111,32 @@ if __name__ == "__main__":
     #     opt.step()
     #
     # exit()
-    train, train_labels = [], []
-    for i in tqdm(range(100)):
-        c = generate_contour()
-        for k in range(8):
-            train.append(augment_contour(c, angle=None, distortion_strength=0.91)[0])
-            train_labels.append(i)
-
-    train_labels = np.array(train_labels)
-    pair_mat = train_labels[None, :] == train_labels[:, None]
-
-    descriptors = [pyefd.elliptic_fourier_descriptors(c, normalize=True) for c in train]
-    descriptors = np.array(descriptors).reshape(len(descriptors), -1)
-
-    pair_dst = np.square(descriptors[None, ...] - descriptors[:, None, ...]).mean(axis=-1)
-    from sklearn.metrics import roc_curve
-
-    fp, tp, th = roc_curve(pair_mat.flatten(), -pair_dst.flatten())
-    print([i for i in np.stack([fp, tp, th], axis=1)[:]])
-    plt.plot(*roc_curve(pair_mat.flatten(), -pair_dst.flatten())[:2])
-    plt.show()
-    exit()
+    # train, train_labels = [], []
+    # for i in tqdm(range(100)):
+    #     c = generate_contour()
+    #     for k in range(8):
+    #         train.append(augment_contour(c, angle=None, distortion_strength=0.91)[0])
+    #         train_labels.append(i)
+    #
+    # train_labels = np.array(train_labels)
+    # pair_mat = train_labels[None, :] == train_labels[:, None]
+    #
+    # descriptors = [pyefd.elliptic_fourier_descriptors(c, normalize=True) for c in train]
+    # descriptors = np.array(descriptors).reshape(len(descriptors), -1)
+    #
+    # pair_dst = learned_comparison(descriptors[None, ...], descriptors[:, None, ...])
+    # from sklearn.metrics import roc_curve
+    #
+    # fp, tp, th = roc_curve(pair_mat.flatten(), pair_dst.flatten())
+    # print([i for i in np.stack([fp, tp, th], axis=1)[:]])
+    # plt.plot(*roc_curve(pair_mat.flatten(), pair_dst.flatten())[:2])
+    # plt.show()
+    # exit()
     # scr = ScreenParser()
     # scr.calibrate('./calibr')
 
-    db_dir = Path(r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data\end_title")
+    db_dir = Path(r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data")
     db = save_templates(db_dir)
-    test_dir = Path(r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\testing\from_run")
-    for f in list(test_dir.glob('*.png')):  # + list(db_dir.glob('*.png')):
-        print(f.name, match(cv.imread(str(f))[..., [0]], db, verbose=0, score_thresh=3.5E-4))
+    test_dir = Path(r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\testing\ocr_test_data")
+    for f in list(test_dir.glob('*.png')) + list(db_dir.rglob('*.png')):
+        print(f.name, match(cv.imread(str(f))[..., [0]], db, verbose=0, score_thresh=-1.5))
