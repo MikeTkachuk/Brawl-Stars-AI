@@ -4,6 +4,7 @@ import numpy as np
 # paths
 # ===============
 char_database = r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data"
+reload_macro = r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\utils\reload_brawlstars2.json"
 
 # ===============
 # controls config

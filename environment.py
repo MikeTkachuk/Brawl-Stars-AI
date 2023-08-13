@@ -18,15 +18,19 @@ from utils.grabscreen import grab_screen
 from utils.getkeys import key_check
 from utils.custom_ocr import save_templates, match
 from utils.misc import is_power_of_two
+from utils.macros import Macro
 from config import _relative_to_pixel
 from controls import act, reset_controls, exit_end_screen, start_battle, exit_defeated
 
+RELOAD_MACRO = Macro(load_path=config.reload_macro)
 
-def _ocr_preproc(rgb_screen, region, thresh=(140, 255), erosion=7, invert=False):
+
+def _ocr_preproc(rgb_screen, region, thresh=(140, 255), erosion=7, invert=False, channels=(0, 1, 2)):
     # region in xywh
     cropper = (slice(region[1], region[1] + region[3]),
                slice(region[0], region[0] + region[2]))
     rgb_region = rgb_screen[cropper]
+    rgb_region = rgb_region[..., channels]
     if invert:
         rgb_region = 255 - rgb_region
 
@@ -40,7 +44,8 @@ def _ocr_preproc(rgb_screen, region, thresh=(140, 255), erosion=7, invert=False)
     return rgb_region
 
 
-def patience_wrapper(func, interval=0.2, timeout_steps=50):
+def patience_wrapper(func, interval=0.2, timeout_steps=50, reload_attempts=2):
+    reload_counter = 0
     patience = 0
     while True:
         if func():
@@ -49,7 +54,11 @@ def patience_wrapper(func, interval=0.2, timeout_steps=50):
             patience += 1
             time.sleep(interval)
         if patience >= timeout_steps:
-            input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
+            if reload_counter < reload_attempts:
+                reload_counter += 1
+                RELOAD_MACRO.play()
+            else:
+                input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
             patience = 0
 
 
@@ -108,8 +117,8 @@ class ScreenParser:
             player_trophies_text = ''
 
         defeated_region = _relative_to_pixel(self.defeated_region, self.main_screen)
-        defeated = _ocr_preproc(screen, defeated_region)
-        defeated_text = match(cv.cvtColor(defeated, cv.COLOR_RGB2GRAY), self.char_database)
+        defeated = _ocr_preproc(screen, defeated_region, channels=(0, 0, 0), thresh=(170, 255))
+        defeated_text = match(cv.cvtColor(defeated, cv.COLOR_RGB2GRAY), self.char_database, subset='Defeated')
 
         proceed_region = _relative_to_pixel(self.proceed_region, self.main_screen)
         proceed = _ocr_preproc(screen, proceed_region)
@@ -154,7 +163,7 @@ class ScreenParser:
                     region = _relative_to_pixel(region, self.main_screen)
                     cropper = (slice(region[1], region[1] + region[3]),
                                slice(region[0], region[0] + region[2]))
-                    spotlight_region = _ocr_preproc(screen, region)
+                    spotlight_region = _ocr_preproc(screen, region, thresh=(190, 255), channels=(0,0,0))
                     spotlight_region = cv.resize(spotlight_region, screen[cropper].shape[:-1][::-1])
                     screen[cropper] = 0.2 * screen[cropper] + 0.8 * spotlight_region
                 cv.imwrite(str(out_dir / f"{i}.jpg"), screen[..., ::-1])
@@ -247,7 +256,8 @@ class GymEnv(gym.Env):
         self.parser = parser
         self.acting_process: ActingProcess = None
         self.done = False
-        self.move_shot_anchors = move_shot_anchors if hasattr(move_shot_anchors, "__len__") else (move_shot_anchors,) * 2
+        self.move_shot_anchors = move_shot_anchors if hasattr(move_shot_anchors, "__len__") else (
+                                                                                                 move_shot_anchors,) * 2
         if not is_power_of_two(self.move_shot_anchors[0]) or not is_power_of_two(self.move_shot_anchors[1]):
             raise ValueError('Num anchors that is not a power of 2 is not allowed.')
 
@@ -310,6 +320,7 @@ class GymEnv(gym.Env):
                  bool whether entered any of the terminal screens,
                  dict info placeholder
         """
+
         if parsed is None:
             parsed = self.parser.get_state()[1]
         (end_title_text, score_text, player_trophies,
@@ -319,16 +330,20 @@ class GymEnv(gym.Env):
         terminated = False
         info = {}
 
-        if any([defeated_text == 'defeated',
+        if any(['defeated' in defeated_text,
                 exit_text == 'exit',
                 proceed_text == 'proceed',
                 play_text == 'play']):
             if self.acting_process is not None and self.acting_process.is_running:
                 self.acting_process.exit()
             terminated = True
+            reload_attempts = 0
             patience = 0
             reward_scan_patience = 0
             while play_text != 'play':
+                (end_title_text, score_text, player_trophies,
+                 exit_text, play_text, defeated_text, proceed_text) = self.parser.get_state()[1]
+
                 print('GymEnv.interpret_screen: Parsed: ', end_title_text, score_text, player_trophies,
                       exit_text, play_text, defeated_text, proceed_text)
 
@@ -371,12 +386,14 @@ class GymEnv(gym.Env):
 
                 patience += 1
                 if patience > max_patience:
-                    input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
+                    if reload_attempts < 2:
+                        reload_attempts += 1
+                        RELOAD_MACRO.play()
+                    else:
+                        input('Env reset timeout. Manual intervention needed.\nPress Enter when ready...')
                     patience = 0
 
                 time.sleep(0.4)
-                (end_title_text, score_text, player_trophies,
-                 exit_text, play_text, defeated_text, proceed_text) = self.parser.get_state()[1]
 
         return reward, terminated, info
 
@@ -388,17 +405,17 @@ class GymEnv(gym.Env):
         """
         assert len(action) == 4  # 1 token + 3 continuous [0,1]: (move, shot, strength)
         assert 0 <= action[0] < self.action_space.n
-        bins = str(bin(int(action[0])))[2:]
-        desired_len = len(str(bin(self.action_space.n - 1))) - 2
+        bins = bin(int(action[0]))[2:]
+        desired_len = len(bin(self.action_space.n - 1)) - 2
         bins = '0' * (desired_len - len(bins)) + bins  # pad with 0
 
         make_move, make_shot, super_ability, use_gadget = bins[:4]
 
-        move_n_bits = len(str(bin(self.move_shot_anchors[0] - 1))) - 2
+        move_n_bits = len(bin(self.move_shot_anchors[0] - 1)) - 2
         move_anchor = int(bins[4:4 + move_n_bits], 2)
         assert len(bins[4:4 + move_n_bits]) == move_n_bits  # just to check myself
 
-        shot_n_bits = len(str(bin(self.move_shot_anchors[1] - 1))) - 2
+        shot_n_bits = len(bin(self.move_shot_anchors[1] - 1)) - 2
         shot_anchor = int(bins[4 + move_n_bits: 4 + move_n_bits + shot_n_bits], 2)
         assert len(bins[4 + move_n_bits: 4 + move_n_bits + shot_n_bits]) == shot_n_bits
 
@@ -426,7 +443,8 @@ class GymEnv(gym.Env):
         """
         Update the action params valid until the next step call. Return the screen observed at the same time
 
-        :param action: optional kwargs of form {direction': (x,y), norm != 0,
+        :param action: optional kwargs of form {
+            'direction': (x,y), norm != 0,
             'make_move': int bool like,
             'make_shot': int bool like,
             'shoot_direction': (x,y), norm != 0,

@@ -115,7 +115,7 @@ def _match_score(cf1, cf2, rot1=None, rot2=None):
     return score
 
 
-def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0, mode='learned'):
+def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0, mode='learned', subset=None):
     """
     Main ocr func
     The dataset defines all the supported characters.
@@ -132,6 +132,8 @@ def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0, mode='learned'):
     if not db:
         warnings.warn('Attempted to match with an empty database.', RuntimeWarning)
         return ''
+    if subset is None:
+        subset = db.keys()
     img, cnt = _parse_sample(inp, crop=crop)
     out = ''
     for c in sort(cnt):  # read left to right
@@ -144,7 +146,7 @@ def match(inp, db, crop=(0, 1), score_thresh=1.2E-4, verbose=0, mode='learned'):
             normalize=True,
             return_transformation=True
         )
-        for ch in db.keys():
+        for ch in subset:
             for i in range(len(db[ch]['cnt'])):
                 if db[ch]['skew'][i] != 0 and c_skew not in [0.0, db[ch]['skew'][i]]:
                     # skip if skew matters and does not match
