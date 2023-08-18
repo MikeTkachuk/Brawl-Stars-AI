@@ -1,4 +1,5 @@
 import os
+import warnings
 from pathlib import Path
 import time
 import re
@@ -368,8 +369,13 @@ class GymEnv(gym.Env):
                             if not raw_rank:
                                 raw_score = 0
                             else:
-                                raw_rank = int(raw_rank)
-                                raw_score = np.linspace(-8, 8, 10)[-raw_rank]
+                                try:
+                                    raw_rank = int(raw_rank)
+                                    assert raw_rank in range(2, 11)
+                                    raw_score = np.linspace(-8, 8, 10)[-raw_rank]
+                                except Exception as e:
+                                    print(f"GymEnv.interpret_screen: error parsing rank score with raw score {raw_rank}")
+                                    got_reward = False
 
                         elif 'youare' in end_title_text or 'yourteam' in end_title_text:
                             raw_rank = 1
@@ -380,6 +386,8 @@ class GymEnv(gym.Env):
                     if got_reward or reward_scan_patience > 5:
                         if reward_scan_patience > 5:
                             self.parser.save_region(region='end_screen_title_region')
+                            reward = -100
+                            warnings.warn(f"Failed to properly parse the end screen. Returning an error reward of {reward}")
                         exit_end_screen()
                     else:
                         reward_scan_patience += 1
