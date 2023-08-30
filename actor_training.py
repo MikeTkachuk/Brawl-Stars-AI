@@ -1,8 +1,10 @@
+import shutil
 import time
 from collections import defaultdict
 
 import numpy as np
 import torch
+import tqdm
 from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
 import hydra
@@ -20,21 +22,22 @@ from utils.misc import create_token
 MAX_EPISODES = 1000
 BATCH_SIZE = 4
 WEIGHT_QUANTILE = 0.5  # value loss quantile to assign episode weights
-RANDOM_ACTION = 0.05  # proba
+RANDOM_ACTION = 0.01  # proba
 POSITIVE_WEIGHT = 1.0  # weigh positive updates (divides neg ones)
+ENTROPY_WEIGHT = 0.012
 
 # align weights so that positive episode with loss 0.1 was on par with the
 # negative one via loss + neg_ep_w_shift
-NEGATIVE_EPISODE_WEIGHT_SHIFT = 0.10
+NEGATIVE_EPISODE_WEIGHT_SHIFT = 0.10  # TODO maybe increase for exploration
 
-# set action_limit_mask and the desired actions to lock them during the run
+# set action_limit_mask to False and the desired actions to lock them during the run.
 
 # make_move, make_shot, super_ability, use_gadget, move_anchor, shot_anchor
-ACTION_LOCK_MASK = torch.tensor([False, True, True, True, False, True])
-ACTION_LOCK = torch.tensor([0.0, 0.0, 0.0, 0.0])
-#
-ACTION_C_LOCK_MASK = torch.tensor([False, True, True])
-ACTION_C_LOCK = torch.tensor([0.0, 0.0])
+ACTION_LOCK_MASK = torch.tensor([True, True, True, False, True, True])
+ACTION_LOCK = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+# move_shift, shot_shift, shot_strength
+ACTION_C_LOCK_MASK = torch.tensor([True, True, True])
+ACTION_C_LOCK = torch.tensor([0.0, 0.0, -10.0])
 
 
 def limit_speed(speed_constraint=2):
@@ -46,7 +49,8 @@ def limit_speed(speed_constraint=2):
             if extra_time > 0:
                 time.sleep(extra_time)
             else:
-                # print(f"off rate by {-extra_time}")
+                if np.random.random() < 0.2:
+                    print(f"off rate by {-extra_time}")
                 pass
             return out
 
@@ -77,11 +81,12 @@ def compute_masked_lambda_returns(rewards,
 
 
 class ACTrainer:
-    def __init__(self, env: GymEnv, actor: ActorCritic, optimizer, dataset: EpisodesDataset):
+    def __init__(self, env: GymEnv, actor: ActorCritic, optimizer, dataset: EpisodesDataset, replay_only=False):
         self.env = env
         self.actor = actor
         self.optimizer = optimizer
         self.dataset = dataset
+        self.replay_only = replay_only
 
         self.actions, self.rewards, self.dones, self.outputs, self.mask_paddings = [], [], [], [], []
         self.observations = []
@@ -89,8 +94,7 @@ class ACTrainer:
 
         self.batch_size = BATCH_SIZE
 
-        self._step = 0
-        self._mean_lambda_return = 0.0
+        self.num_step = 0
         self._replay = None
         self._active_episodes = None
         self._update_weights = None
@@ -114,15 +118,18 @@ class ACTrainer:
     @torch.no_grad()
     def _assign_episode_weights(self, loss, mask_padding):
         for i, episode in enumerate(self._active_episodes):
-            episode_loss = loss[i][mask_padding[i]]
-            episode_loss[episode_loss < 0] = episode_loss[episode_loss < 0] + NEGATIVE_EPISODE_WEIGHT_SHIFT
-            episode.weight = torch.quantile(episode_loss,
-                                            WEIGHT_QUANTILE).detach().item()
+            if episode is None:
+                continue
+            episode_loss = loss[i][mask_padding[i]]  # for scale with what is logged
+            old_weight = episode.weight
+            new_weight = torch.quantile(episode_loss, WEIGHT_QUANTILE).detach().item()
+            episode.weight = new_weight
+            print(f"Changed weight: {old_weight:.3f} -> {new_weight:.3f}")
 
     def reset(self):
         print("ACTrainer.reset: Started reset")
         self.metrics = defaultdict(float)
-        self._step = 0
+        self.num_step = 0
 
         # sample episodes via prioritized sampling
         if len(self.dataset) >= self.batch_size - 1:
@@ -140,7 +147,7 @@ class ACTrainer:
             self._active_episodes = [None]
 
         self.actions, self.rewards, self.dones, self.outputs, self.mask_paddings = [], [], [], [], []
-        self.observations = [self.env.reset()]
+        self.observations = [self.env.reset()] if not self.replay_only else []
         self.actor.reset(self.batch_size)
         self.actor.train()
 
@@ -152,13 +159,13 @@ class ACTrainer:
     @limit_speed(speed_constraint=2)
     def step(self):
         curr_obs = torch.tensor(self.observations[-1].transpose(2, 0, 1)).unsqueeze(0).float() / 255.0
-        if self._step < self._replay['ends'].size(1):
-            replay_obs = self._replay['observations'][:, self._step]
-            replay_mask_padding = self._replay['mask_padding'][:, self._step]
-            replay_actions = torch.cat([self._replay['actions'][:, self._step],
-                                        self._replay['actions_continuous'][:, self._step]], dim=-1)
-            replay_rewards = self._replay['rewards'][:, self._step]
-            replay_ends = self._replay['ends'][:, self._step]
+        if self.num_step < self._replay['ends'].size(1):
+            replay_obs = self._replay['observations'][:, self.num_step]
+            replay_mask_padding = self._replay['mask_padding'][:, self.num_step]
+            replay_actions = torch.cat([self._replay['actions'][:, self.num_step],
+                                        self._replay['actions_continuous'][:, self.num_step]], dim=-1)
+            replay_rewards = self._replay['rewards'][:, self.num_step]
+            replay_ends = self._replay['ends'][:, self.num_step]
         else:
             replay_obs = torch.zeros_like(self._replay['observations'][:, -1])
             replay_mask_padding = torch.zeros_like(self._replay['mask_padding'][:, -1])
@@ -193,8 +200,8 @@ class ACTrainer:
         full_ends = torch.cat([torch.tensor([done]), replay_ends], dim=0)
         self.dones.append(full_ends)
 
-        self._step += 1
-        if reward == -100 or self._step > 400:
+        self.num_step += 1
+        if reward == -100 or self.num_step > 400:
             self.metrics['buggy_episode'] = 1.0
         else:
             self.metrics['buggy_episode'] = 0.0
@@ -204,11 +211,11 @@ class ACTrainer:
     def _create_episode(self):
         obs = np.stack(self.observations, axis=0)
         obs = torch.ByteTensor(obs).permute(0, 3, 1, 2).contiguous()
-        actions = torch.LongTensor(torch.stack(self.actions, dim=1)[0, :self._step, ..., :-3].long())
-        actions_continuous = torch.FloatTensor(torch.stack(self.actions, dim=1)[0, :self._step, ..., -3:])
-        rewards = torch.FloatTensor(torch.stack(self.rewards, dim=1)[0, :self._step].float())
-        ends = torch.LongTensor(torch.stack(self.dones, dim=1)[0, :self._step].long())
-        mask_padding = torch.BoolTensor(torch.ones(self._step, dtype=torch.bool))
+        actions = torch.LongTensor(torch.stack(self.actions, dim=1)[0, :self.num_step, ..., :-3].long())
+        actions_continuous = torch.FloatTensor(torch.stack(self.actions, dim=1)[0, :self.num_step, ..., -3:])
+        rewards = torch.FloatTensor(torch.stack(self.rewards, dim=1)[0, :self.num_step].float())
+        ends = torch.LongTensor(torch.stack(self.dones, dim=1)[0, :self.num_step].long())
+        mask_padding = torch.BoolTensor(torch.ones(self.num_step, dtype=torch.bool))
 
         episode = Episode(
             observations=obs,
@@ -234,8 +241,8 @@ class ACTrainer:
 
     def episode_end(self):
         # finish replaying if needed
-        if self._replay['ends'].size(1) > self._step:
-            for i in range(self._step, self._replay['ends'].size(1)):
+        if self._replay['ends'].size(1) > self.num_step:
+            for i in range(self.num_step, self._replay['ends'].size(1)):
                 full_mask_padding = torch.cat([torch.tensor([False]), self._replay['mask_padding'][:, i]], dim=0)
                 self.mask_paddings.append(full_mask_padding)
 
@@ -243,23 +250,32 @@ class ACTrainer:
                                  self._replay['observations'][:, i]], dim=0)
                 output = self.actor.forward(obs, mask_padding=full_mask_padding)
                 self.outputs.append(output)
-                replay_actions = torch.cat([self._replay['actions'][:, self._step],
-                                            self._replay['actions_continuous'][:, self._step]], dim=-1)
-                full_actions = torch.cat([torch.zeros_like(self.actions[-1][[0]]), replay_actions])
+                replay_actions = torch.cat([self._replay['actions'][:, self.num_step],
+                                            self._replay['actions_continuous'][:, self.num_step]], dim=-1)
+                full_actions = torch.cat([torch.zeros_like(replay_actions)[[0]], replay_actions])
                 self.actions.append(full_actions)
                 full_rewards = torch.cat([torch.tensor([0.0]), self._replay['rewards'][:, i]], dim=0)
                 self.rewards.append(full_rewards)
                 full_ends = torch.cat([torch.tensor([True]), self._replay['ends'][:, i]], dim=0)
                 self.dones.append(full_ends)
 
-        # update value estimation
-        self.rewards[self._step - 2][0] = self.rewards[self._step - 1][0]  # move reward closer bc of lambda returns
+        if not self.replay_only:
+            # try to learn neg reward
+            true_reward = self.rewards[self.num_step - 1][0].item()
+            self.rewards[self.num_step - 1][0] = true_reward if true_reward > 0.375 else (true_reward - 0.375) / 1.375  # positive starts at rank 3
+            # update value estimation
+            self.rewards[self.num_step - 2][0] = self.rewards[self.num_step - 1][0]  # move reward closer bc of lambda returns
 
-        # pop trailing obs
-        self.observations.pop(-1)
-        self.dataset.add_episode(
-            self._create_episode()
-        )
+            self.metrics["reward"] = self.rewards[self.num_step - 2][0]
+            self.metrics["true_reward"] = true_reward
+            self.metrics["episode_length"] = self.num_step
+
+            # pop trailing obs
+            self.observations.pop(-1)
+            self.dataset.add_episode(
+                self._create_episode()
+            )
+
         episode_output = ImagineOutput(
             observations=None,
             actions=torch.stack(self.actions, dim=1)[..., :-3],
@@ -276,15 +292,13 @@ class ACTrainer:
         loss = self.ac_loss(episode_output, torch.stack(self.mask_paddings, dim=1))
         print("ACTrainer.episode_end: backward started")
         loss.loss_total.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 10.0)
         self.optimizer.step()
         self._update_metrics(loss.intermediate_losses)
         self.metrics["actor_critic/train/total_loss"] = loss.loss_total.item()
-        self.metrics["reward"] = self.rewards[self._step - 2][0]
-        self.metrics["episode_length"] = self._step
-        self.metrics["mean_lambda_return"] = self._mean_lambda_return
         return self.metrics
 
-    def ac_loss(self, outputs: ImagineOutput, mask_paddings, entropy_weight=0.001):
+    def ac_loss(self, outputs: ImagineOutput, mask_paddings, entropy_weight=ENTROPY_WEIGHT):
         with torch.no_grad():
             lambda_returns = compute_masked_lambda_returns(
                 rewards=outputs.rewards,
@@ -302,22 +316,24 @@ class ACTrainer:
 
         (log_probs, entropy), (log_probs_continuous, entropy_cont) = self.actor.get_proba_entropy(outputs)
 
-        batch_lengths = torch.count_nonzero(mask_paddings, dim=1).clip(1, ).unsqueeze(-1)  # TODO questionable
+        batch_lengths = torch.count_nonzero(mask_paddings, dim=1).unsqueeze(-1)  # TODO questionable
         update_weight = torch.tensor(self._update_weights).reshape(self.batch_size, 1) * \
-                        torch.min(batch_lengths) / batch_lengths
+                        torch.min(batch_lengths[batch_lengths > 0]) / batch_lengths
         advantage_factor = lambda_returns - values.detach()
         advantage_factor[advantage_factor < 0] /= POSITIVE_WEIGHT
 
         # compute losses
         loss_actions = -1 * (log_probs * advantage_factor.unsqueeze(-1))[..., ACTION_LOCK_MASK]
-        loss_actions_masked = torch.masked_select(update_weight * loss_actions, mask_paddings.unsqueeze(-1)).mean()
+        loss_actions_masked = torch.masked_select(update_weight.unsqueeze(-1) * loss_actions,
+                                                  mask_paddings.unsqueeze(-1)).mean()
 
-        loss_continuous_actions = -1 * (log_probs_continuous * advantage_factor.unsqueeze(-1))[..., ACTION_C_LOCK_MASK]
-        loss_continuous_actions_masked = torch.masked_select(update_weight * loss_continuous_actions,
+        loss_continuous_actions = -1 * (log_probs_continuous.clamp(-5, 5) * advantage_factor.unsqueeze(-1))[
+            ..., ACTION_C_LOCK_MASK]
+        loss_continuous_actions_masked = torch.masked_select(update_weight.unsqueeze(-1) * loss_continuous_actions,
                                                              mask_paddings.unsqueeze(-1)).mean()
 
-        loss_entropy = torch.masked_select(- entropy_weight * entropy, mask_paddings.unsqueeze(-1)).mean()
-        loss_entropy_continuous = torch.masked_select(- entropy_weight * entropy_cont,
+        loss_entropy = torch.masked_select(- entropy_weight * entropy[..., ACTION_LOCK_MASK], mask_paddings.unsqueeze(-1)).mean()
+        loss_entropy_continuous = torch.masked_select(- entropy_weight / 50 * entropy_cont[..., ACTION_C_LOCK_MASK],
                                                       mask_paddings.unsqueeze(-1)).mean()
         loss_values = torch.square(values - lambda_returns)
         loss_values_masked = torch.masked_select(update_weight * loss_values, mask_paddings).mean()
@@ -327,9 +343,17 @@ class ACTrainer:
                                                loss_values=loss_values_masked,
                                                loss_entropy=loss_entropy,
                                                loss_entropy_continuous=loss_entropy_continuous)
+        print('update weights:', self._update_weights)
+        # episode weight ~ absolute loss per episode
+        loss_actions = loss_actions.detach()
+        loss_actions[loss_actions < 0] = loss_actions[loss_actions < 0] + NEGATIVE_EPISODE_WEIGHT_SHIFT
+        loss_continuous_actions = loss_entropy_continuous.detach()
+        loss_continuous_actions[loss_continuous_actions < 0] = loss_continuous_actions[
+                                                                   loss_continuous_actions < 0
+                                                                   ] + NEGATIVE_EPISODE_WEIGHT_SHIFT
 
-        # episode weight ~ loss per episode
-        self._assign_episode_weights(loss_values + loss_actions + loss_continuous_actions, mask_paddings)
+        self._assign_episode_weights(loss_values + loss_actions.mean(dim=-1) + loss_continuous_actions.mean(dim=-1),
+                                     mask_paddings)
         return full_loss
 
 
@@ -347,8 +371,9 @@ def main(cfg: DictConfig):
         skip_update = False
         while not env.done:
             step_metrics = ac_trainer.step()
-            if ac_trainer._step % 5 == 0:
+            if ac_trainer.num_step % 5 == 0:
                 print(f"step value {ac_trainer.outputs[-1].means_values[0].item()}")
+                print(f"actions: {ac_trainer.actions[-1][0].detach().numpy()}")
             if len(ac_trainer.observations) > 20 and \
                     not np.count_nonzero(ac_trainer.observations[-20] -
                                          ac_trainer.observations[-1]) or step_metrics['buggy_episode']:
@@ -364,7 +389,32 @@ def main(cfg: DictConfig):
             print('Logging')
             wandb.log({"epoch": n_episode, **episode_metrics})
             print('Saving checkpoint')
+            if (n_episode + 1) % 50 == 0:
+                shutil.copytree('checkpoints', f'checkpoints/checkpoint_{n_episode}', ignore=shutil.ignore_patterns("dataset*", "checkpoint*"))
             trainer.save_checkpoint(n_episode, False, flush=False)
+
+
+@hydra.main(config_path=r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl_iris\config", config_name="trainer")
+def main_replay(cfg: DictConfig):
+    trainer = Trainer(cfg)
+    shutil.copytree(r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\outputs\2023-08-18\22-50-03\checkpoints",
+                    "checkpoints", dirs_exist_ok=True)
+    trainer.load_checkpoint()
+
+    env = None
+    actor = trainer.agent.actor_critic
+    optimizer = trainer.optimizer_actor_critic
+    ac_trainer = ACTrainer(env, actor, optimizer, trainer.train_dataset, replay_only=True)
+    ac_trainer.batch_size = 4 + 1
+
+    for n_step in tqdm.tqdm(range(MAX_EPISODES), desc="Step: ", total=MAX_EPISODES):
+        ac_trainer.reset()
+        episode_metrics = ac_trainer.episode_end()
+        print('Logging')
+        wandb.log({"epoch": n_step, **episode_metrics})
+        if n_step % 5 == 0:
+            print('Saving checkpoint')
+            trainer.save_checkpoint(n_step, True)
 
 
 if __name__ == "__main__":

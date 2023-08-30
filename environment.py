@@ -102,7 +102,7 @@ class ScreenParser:
             # read end screen score
             score_region = _relative_to_pixel(self.score_region, self.main_screen)
             score = _ocr_preproc(screen, score_region)
-            score_text = match(cv.cvtColor(score, cv.COLOR_RGB2GRAY), self.char_database)
+            score_text = match(cv.cvtColor(score, cv.COLOR_RGB2GRAY), self.char_database, subset='+-0123456789')
         else:
             end_title_text = ''
             score_text = ''
@@ -353,7 +353,13 @@ class GymEnv(gym.Env):
                 elif exit_text == 'exit' or proceed_text == 'proceed':
                     got_reward = True
                     if score_text:
-                        reward = float(score_text)
+                        try:
+                            reward = float(score_text)
+                            assert -10 <= reward <= 10
+                        except Exception as e:
+                            print(f"GymEnv.interpret_screen: error parsing rank score from input: {score_text}")
+                            got_reward = False
+
                     else:
                         raw_score = 0
                         if any(txt in end_title_text for txt in ['defeat', 'victory', 'draw']):
@@ -374,7 +380,7 @@ class GymEnv(gym.Env):
                                     assert raw_rank in range(2, 11)
                                     raw_score = np.linspace(-8, 8, 10)[-raw_rank]
                                 except Exception as e:
-                                    print(f"GymEnv.interpret_screen: error parsing rank score with raw score {raw_rank}")
+                                    print(f"GymEnv.interpret_screen: error parsing rank score with raw score: {raw_rank}")
                                     got_reward = False
 
                         elif 'youare' in end_title_text or 'yourteam' in end_title_text:
