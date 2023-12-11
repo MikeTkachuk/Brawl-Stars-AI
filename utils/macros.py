@@ -107,6 +107,7 @@ class Macro:
     def start_recording(self, out_dir=None):
         self.add_hooks()
         print("macro.start_recording: Started recording")
+        print("Press Ctrl+Q to stop")
         keyboard.wait('ctrl+q', suppress=True)
         self.stop_recording(out_dir=out_dir)
 
@@ -140,6 +141,6 @@ class Macro:
 
 if __name__ == "__main__":
     time.sleep(2)
-    m = Macro(name="reload_brawlstars2")
+    m = Macro(name="reload_brawlstars3")
     m.start_recording()
     m.play()

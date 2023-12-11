@@ -3,8 +3,8 @@ import numpy as np
 # ===============
 # paths
 # ===============
-char_database = r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\ocr_data"
-reload_macro = r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\utils\reload_brawlstars2.json"
+char_database = r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\ocr_data"
+reload_macro = r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\utils\reload_brawlstars3.json"
 
 # ===============
 # controls config
@@ -25,7 +25,7 @@ terminate_program = 'Q'  # press Q to terminate everything with exit()
 # ===============
 
 # --- main screen absolute size ---
-main_screen = (0, 41, 1388, 781)  # absolute. The only thing that should be changed in case of main screen displacement
+main_screen = (0, 49, 1323, 743)  # absolute. The only thing that should be changed in case of main screen displacement
 
 # do NOT change without full recalibration
 ref_main_screen = (0, 41, 1388, 781)    # to fix the relative calculations.

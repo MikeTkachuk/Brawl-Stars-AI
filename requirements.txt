@@ -13,4 +13,4 @@ pypiwin32==223
 pywin32==306
 timm==0.4.12
 boto3==1.26.*
-tqdm==4.66.1
+tqdm==4.62.3
