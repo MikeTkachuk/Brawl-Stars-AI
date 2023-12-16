@@ -3,6 +3,7 @@ import shutil
 import time
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -10,6 +11,8 @@ import tqdm
 import hydra
 from omegaconf import DictConfig
 import wandb
+import matplotlib.pyplot as plt
+plt.switch_backend("AGG")
 
 from src.dataset import EpisodesDataset
 from src.episode import Episode
@@ -33,9 +36,11 @@ NEGATIVE_EPISODE_WEIGHT_SHIFT = 0.0  # TODO maybe increase for exploration
 # set action_limit_mask to False and the desired actions to lock them during the run.
 
 # make_move, make_shot, super_ability, use_gadget, move_anchor, shot_anchor
+ACTION_NAMES = ["make_move", "make_shot", "super_ability", "use_gadget", "move_anchor", "shot_anchor"]
 ACTION_LOCK_MASK = torch.tensor([True, True, True, False, True, True]).to(device)
 ACTION_LOCK = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).to(device)
 # move_shift, shot_shift, shot_strength
+ACTION_C_NAMES = ["move_shift", "shot_shift", "shot_strength"]
 ACTION_C_LOCK_MASK = torch.tensor([True, True, True]).to(device)
 ACTION_C_LOCK = torch.tensor([0.0, 0.0, -10.0]).to(device)
 
@@ -80,10 +85,24 @@ def compute_masked_lambda_returns(rewards,
     return lambda_returns
 
 
+def warmup_lr_lambda(epoch, init_lr_scale, num_warmup_steps):
+    if epoch < num_warmup_steps:
+        return init_lr_scale + (1 - init_lr_scale) * (epoch / num_warmup_steps)
+    return 1.0
+
+
+def lambda_return_schedule(epoch, last_epoch=MAX_EPISODES//2, start_lambda=0.95, last_lambda=0.99):
+    start_pow = np.log(1 - start_lambda)
+    last_pow = np.log(1 - last_lambda)
+    if epoch < last_epoch:
+        return 1 - np.exp(start_pow + (last_pow - start_pow) * epoch / last_epoch)
+    return last_lambda
+
+
 class ACTrainer:
     def __init__(self,
                  cfg,
-                 env: GymEnv,
+                 env: Optional[GymEnv],
                  actor: ActorCritic,
                  optimizer,
                  dataset: EpisodesDataset,
@@ -92,6 +111,12 @@ class ACTrainer:
         self.env = env
         self.actor = actor.to(device)
         self.optimizer = optimizer
+        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.optimizer,
+            lambda epoch: warmup_lr_lambda(epoch,
+                                           self.cfg.training.actor_critic.lr_warmup_scale,
+                                           self.cfg.training.actor_critic.lr_warmup_steps)
+        )
         self.dataset = dataset
         self.replay_only = replay_only
 
@@ -133,21 +158,23 @@ class ACTrainer:
             episode.weight = new_weight
             print(f"Changed weight: {old_weight:.3f} -> {new_weight:.3f}")
 
-    def reset(self):
+    def reset(self, collection=False, prioritize=True):
         print("ACTrainer.reset: Started reset")
         self.metrics = defaultdict(float)
         self.collection_num_step = 0
 
         # sample episodes via prioritized sampling
         if len(self.dataset) >= self.batch_size - 1 and self.batch_size > 1:
-            probas, weights = self.get_episode_proba()
+            probas, weights = self.get_episode_proba(alpha=0.7 if prioritize else 0.0)
             episode_ids = np.random.choice(np.arange(len(self.dataset)),
                                            size=(self.batch_size - 1,),
                                            p=probas,
                                            replace=False)
             self._active_episodes = [None] + [self.dataset.episodes[i] for i in episode_ids]
             self._update_weights = np.concatenate([np.ones(1), weights[episode_ids]])
+            start_ = time.time()
             self._replay = self.dataset.sample_replay(samples=episode_ids)
+            print("replay sample elapsed: ", time.time() - start_)
         else:
             self._update_weights = np.ones(self.batch_size)
             self._replay = self._get_placeholder_replay()
@@ -155,7 +182,7 @@ class ACTrainer:
 
         self.actions, self.rewards, self.dones, self.outputs, self.mask_paddings = [], [], [], [], []
         self.observations = [self.env.reset()] if not self.replay_only else []
-        self.actor.reset(self.batch_size)
+        self.actor.reset(1 if collection else self.batch_size)
         self.actor.train()
 
     def _update_metrics(self, metrics: dict):
@@ -286,9 +313,10 @@ class ACTrainer:
             'mask_padding': torch.zeros((self.batch_size - 1, 1), dtype=torch.bool)
         }
 
-    def episode_end(self):
+    def episode_end(self, epoch=None, collection=False):
         # finish replaying if needed
-        if self._replay['ends'].size(1) > self.collection_num_step:
+        if self._replay['ends'].size(1) > self.collection_num_step and not collection:
+            start_catchup = time.time()
             for i in range(self.collection_num_step, self._replay['ends'].size(1)):
                 full_mask_padding = torch.cat([torch.tensor([False]), self._replay['mask_padding'][:, i]], dim=0)
                 self.mask_paddings.append(full_mask_padding)
@@ -306,6 +334,7 @@ class ACTrainer:
                 self.rewards.append(full_rewards)
                 full_ends = torch.cat([torch.tensor([True]), self._replay['ends'][:, i]], dim=0)
                 self.dones.append(full_ends)
+            print("replay catch-up elapsed: ", time.time() - start_catchup)
 
         if not self.replay_only:
             # try to learn neg reward
@@ -313,10 +342,10 @@ class ACTrainer:
             self.rewards[self.collection_num_step - 1][0] = true_reward if true_reward > 0.375 else (
                         true_reward - 0.375) / 1.375  # positive starts at rank 3
             # update value estimation
-            self.rewards[self.collection_num_step - 2][0] = self.rewards[self.collection_num_step - 1][
+            self.rewards[self.collection_num_step - 3][0] = self.rewards[self.collection_num_step - 1][
                 0]  # move reward closer bc of lambda returns
 
-            self.metrics["reward"] = self.rewards[self.collection_num_step - 2][0]
+            self.metrics["reward"] = self.rewards[self.collection_num_step - 3][0]
             self.metrics["true_reward"] = true_reward
             self.metrics["episode_length"] = self.collection_num_step
 
@@ -325,6 +354,9 @@ class ACTrainer:
             self.dataset.add_episode(
                 self._create_episode()
             )
+
+        if collection:
+            return self.metrics
 
         episode_output = ImagineOutput(
             observations=None,
@@ -338,29 +370,73 @@ class ACTrainer:
             rewards=torch.stack(self.rewards, dim=1).reshape(self.batch_size, -1).to(device),
             ends=torch.stack(self.dones, dim=1).reshape(self.batch_size, -1).to(device)
         )
+        mask_paddings = torch.stack(self.mask_paddings, dim=1).to(device)
+
+        # log action and value histograms
+        def _create_hist(data_, bins=32, names=None):
+            if isinstance(data_, torch.Tensor):
+                data_ = data_.detach().cpu().numpy()
+            if len(data_.shape) == 1:
+                data_ = data_.reshape(-1, 1)
+            else:
+                data_ = data_.reshape(-1, data_.shape[-1])
+            f, ax = plt.subplots()
+
+            ax: plt.Subplot
+            for i in range(data_.shape[-1]):
+                ax.hist(data_[:, i], bins=bins, alpha=0.7, label=str(i) if names is None else names[i])
+            ax.legend()
+            return wandb.Image(f)
+
+        self.metrics["values"] = _create_hist(episode_output.values[mask_paddings], names=["value"])
+        self.metrics["binary_logits"] = _create_hist(
+            episode_output.logits_actions[mask_paddings][..., :4], names=ACTION_NAMES[:4])
+        self.metrics["anchor_logits"] = _create_hist(torch.stack([
+            episode_output.logits_actions[mask_paddings][..., 4:8],
+            episode_output.logits_actions[mask_paddings][..., 8:],
+        ], dim=-1), names=ACTION_NAMES[4:])
+        self.metrics["means"] = _create_hist(episode_output.continuous_means[mask_paddings], names=ACTION_C_NAMES)
+        self.metrics["stds"] = _create_hist(episode_output.continuous_stds[mask_paddings], names=ACTION_C_NAMES)
+
+        self.metrics["actor_critic/train/lr"] = self.lr_scheduler.get_last_lr()[0]
 
         self.optimizer.zero_grad()
-        loss = self.ac_loss(episode_output, torch.stack(self.mask_paddings, dim=1).to(device))
+        loss = self.ac_loss(episode_output, mask_paddings, epoch=epoch)
         print("ACTrainer.episode_end: backward started")
+        start_backward = time.time()
         loss.loss_total.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg.training.actor_critic.max_grad_norm)
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(),
+                                       self.cfg.training.actor_critic.max_grad_norm,
+                                       error_if_nonfinite=True)
         self.optimizer.step()
+        self.lr_scheduler.step()
+        print("backward update elapsed: ", time.time() - start_backward)
         self._update_metrics(loss.intermediate_losses)
         self.metrics["actor_critic/train/total_loss"] = loss.loss_total.item()
         return self.metrics
 
-    def ac_loss(self, outputs: ImagineOutput, mask_paddings):
+    def ac_loss(self, outputs: ImagineOutput, mask_paddings, epoch=None):
+        mask_paddings = torch.logical_and(mask_paddings, outputs.ends.logical_not())  # do not include end into loss
+        values = outputs.values
+        # TODO test value normalization
+        # values_std = torch.masked_select(values, mask_paddings).std().detach()
+        # values_mean = torch.masked_select(values, mask_paddings).mean().detach()
+        # values = (values - values_mean) / values_std
+        if epoch is None or not self.cfg.training.actor_critic.lambda_warmup_init:
+            lambda_ = self.cfg.training.actor_critic.lambda_
+        else:
+            lambda_ = lambda_return_schedule(epoch, start_lambda=self.cfg.training.actor_critic.lambda_warmup_init,
+                                             last_lambda=self.cfg.training.actor_critic.lambda_)
+        self.metrics["actor_critic/train/lambda_"] = lambda_
         with torch.no_grad():
             lambda_returns = compute_masked_lambda_returns(
                 rewards=outputs.rewards,
-                values=outputs.values,
+                values=values,
                 ends=outputs.ends,
                 mask_paddings=mask_paddings,
                 gamma=self.cfg.training.actor_critic.gamma,
-                lambda_=self.cfg.training.actor_critic.lambda_,
+                lambda_=lambda_,
             )
-        mask_paddings = torch.logical_and(mask_paddings, outputs.ends.logical_not())  # do not include end into loss
-        values = outputs.values
 
         to_print = torch.stack([values[0], lambda_returns[0]], dim=0).T[mask_paddings[0]]
         print("values and returns\n", to_print.cpu().detach().numpy())
@@ -415,21 +491,50 @@ class ACTrainer:
 def main(cfg: DictConfig):
     trainer = Trainer(cfg)
 
+    # shutil.copytree(
+    #     Path(r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\2023-12-13\14-29-05\checkpoints\dataset"),
+    #     Path("checkpoints\dataset"), dirs_exist_ok=True)
+    # for f in Path("checkpoints\dataset").glob("*"):
+    #     if int(f.stem) > 63:
+    #         f.unlink()
+    # trainer.train_dataset.load_disk_checkpoint(trainer.ckpt_dir / 'dataset')
+
     shutil.copytree(
-        Path(r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\2023-12-08\init_data\checkpoints\dataset"),
-        Path("checkpoints\dataset"), dirs_exist_ok=True)
-    for f in Path("checkpoints\dataset").glob("*"):
-        if int(f.stem) > 32:
-            f.unlink()
-    trainer.train_dataset.load_disk_checkpoint(trainer.ckpt_dir / 'dataset')
-    # trainer.load_checkpoint()
+        Path(r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\2023-12-13\19-07-50\checkpoints"),
+        Path("checkpoints"), dirs_exist_ok=True)
+
+    trainer.load_checkpoint()
+
+    start_epoch = trainer.start_epoch
     env: GymEnv = trainer.train_collector.env.env
     actor = trainer.agent.actor_critic
-    actor.checkpoint_backbone = True
+    actor.checkpoint_backbone = trainer.cfg.training.actor_critic.checkpoint_backbone
+    actor.fp16 = trainer.cfg.common.fp16
     optimizer = trainer.optimizer_actor_critic
     ac_trainer = ACTrainer(trainer.cfg, env, actor, optimizer, trainer.train_dataset)
 
-    for n_episode in range(MAX_EPISODES):
+    while len(ac_trainer.dataset) < ac_trainer.batch_size:
+        ac_trainer.reset(collection=True)
+        skip_update = False
+        while not env.done:
+            step_metrics = ac_trainer.collection_step()
+            if len(ac_trainer.observations) > 20 and \
+                    not np.count_nonzero(ac_trainer.observations[-20] -
+                                         ac_trainer.observations[-1]) or step_metrics['buggy_episode']:
+                print("Train loop: env froze, attempting reload")
+                skip_update = True
+                break  # if froze inside episode
+
+        if skip_update:
+            env.__exit__(soft=False)
+            RELOAD_MACRO.play()
+        else:
+            if not ac_trainer.actions:
+                print("Empty episode. Skipping")
+                continue
+            ac_trainer.episode_end(collection=True)
+
+    for n_episode in range(start_epoch, MAX_EPISODES):
         ac_trainer.reset()
         skip_update = False
         while not env.done:
@@ -451,6 +556,7 @@ def main(cfg: DictConfig):
         if skip_update:
             env.__exit__(soft=False)
             RELOAD_MACRO.play()
+            wandb.log({"epoch": n_episode, **ac_trainer.metrics})
         else:
             if not ac_trainer.actions:
                 print("Empty episode. Skipping")
@@ -468,43 +574,72 @@ def main(cfg: DictConfig):
 @hydra.main(config_path=r"C:\Users\Michael\PycharmProjects\Brawl_iris\config", config_name="trainer")
 def main_replay(cfg: DictConfig):
     trainer = Trainer(cfg)
-    shutil.copytree(r"C:\Users\Mykhailo_Tkachuk\PycharmProjects\Brawl-Stars-AI\outputs\2023-08-18\22-50-03\checkpoints",
-                    "checkpoints", dirs_exist_ok=True)
-    trainer.load_checkpoint()
+    # shutil.copytree(r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\offline_converge\2023-12-14_21-40-07\checkpoints",
+    #                 "checkpoints", dirs_exist_ok=True)
+    # trainer.load_checkpoint(agent_only=True)
+    # trainer.train_dataset.load_disk_checkpoint(trainer.ckpt_dir / 'dataset')
+
+
+    shutil.copytree(
+        Path(r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\2023-12-14\05-00-41\checkpoints\dataset"),
+        Path("checkpoints\dataset"), dirs_exist_ok=True)
+    for f in Path("checkpoints\dataset").glob("*"):
+        if int(f.stem) > 0:
+            continue
+            # f.unlink()
+    trainer.train_dataset.load_disk_checkpoint(trainer.ckpt_dir / 'dataset')
 
     env = None
     actor = trainer.agent.actor_critic
+    actor.checkpoint_backbone = trainer.cfg.training.actor_critic.checkpoint_backbone
+    actor.fp16 = trainer.cfg.common.fp16
+
     optimizer = trainer.optimizer_actor_critic
     ac_trainer = ACTrainer(trainer.cfg, env, actor, optimizer, trainer.train_dataset, replay_only=True)
-    ac_trainer.batch_size = 4 + 1
+    ac_trainer.batch_size = ac_trainer.batch_size + 1
 
-    for n_step in tqdm.tqdm(range(MAX_EPISODES), desc="Step: ", total=MAX_EPISODES):
-        ac_trainer.reset()
-        episode_metrics = ac_trainer.episode_end()
+    for n_step in tqdm.tqdm(range(MAX_EPISODES), desc="Step: ", total=MAX_EPISODES, ):
+        ac_trainer.reset(prioritize=False)
+        episode_metrics = ac_trainer.episode_end(epoch=n_step)
         print('Logging')
         wandb.log({"epoch": n_step, **episode_metrics})
-        if n_step % 5 == 0:
+        if n_step % 100 == 0:
             print('Saving checkpoint')
-            trainer.save_checkpoint(n_step, True)
+            trainer.save_checkpoint(n_step, False, save_dataset=False)
 
 
 @hydra.main(config_path=r"C:\Users\Michael\PycharmProjects\Brawl_iris\config", config_name="trainer")
 def inspect(cfg: DictConfig):
-    trainer = Trainer(cfg)
+    try:
+        trainer = Trainer(cfg)
 
-    shutil.copytree(
-        Path(r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\2023-12-10\00-32-46\checkpoints"),
-        Path("checkpoints"), dirs_exist_ok=True)
-    trainer.load_checkpoint()
-    env: GymEnv = trainer.train_collector.env.env
-    actor = trainer.agent.actor_critic
-    actor.checkpoint_backbone = True
-    optimizer = trainer.optimizer_actor_critic
-    ac_trainer = ACTrainer(trainer.cfg, env, actor, optimizer, trainer.train_dataset, replay_only=True)
-    ac_trainer.reset()
-    ac_trainer.episode_end()
-    shutil.rmtree(os.getcwd())
+        # shutil.copytree(
+        #     Path(r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\2023-12-14\05-00-41\checkpoints"),
+        #     Path("checkpoints"), dirs_exist_ok=True)
+        # trainer.load_checkpoint()
+
+        shutil.copytree(
+            Path(r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\2023-12-14\05-00-41\checkpoints\dataset"),
+            Path("checkpoints\dataset"), dirs_exist_ok=True)
+        for f in Path("checkpoints\dataset").glob("*"):
+            if int(f.stem) > 0:
+                continue
+                # f.unlink()
+        trainer.train_dataset.load_disk_checkpoint(trainer.ckpt_dir / 'dataset')
+
+        env: GymEnv = trainer.train_collector.env.env
+        actor = trainer.agent.actor_critic
+        actor.checkpoint_backbone = trainer.cfg.training.actor_critic.checkpoint_backbone
+        actor.fp16 = trainer.cfg.common.fp16
+
+        optimizer = trainer.optimizer_actor_critic
+        ac_trainer = ACTrainer(trainer.cfg, env, actor, optimizer, trainer.train_dataset, replay_only=True)
+        ac_trainer.reset()
+        ac_trainer.episode_end()
+    finally:
+        wandb.finish()
+        shutil.rmtree(os.getcwd())
 
 
 if __name__ == "__main__":
-    main()
+    main_replay()
