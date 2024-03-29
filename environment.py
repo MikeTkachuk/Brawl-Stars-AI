@@ -130,7 +130,7 @@ class ScreenParser:
     def get_state(self):
         """
         Captures a predefined screen region, parses screen to produce reward and game state
-        :return: HxWxC RGB array, float reward, bool is_training
+        :return: HxWxC RGB array, list of parsed strings
         """
         screen = grab_screen(self.main_screen)
         parse_results = self._parse_screen(screen)

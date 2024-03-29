@@ -141,6 +141,6 @@ class Macro:
 
 if __name__ == "__main__":
     time.sleep(2)
-    m = Macro(name="reload_brawlstars3")
+    m = Macro(name="bluestacks_reload")
     m.start_recording()
     m.play()
