@@ -296,7 +296,7 @@ class GymEnv(gym.Env):
             super_ability,
             use_gadget,
             changed
-        ))
+        ), daemon=True)
 
         action_transmitter = {
             'direction': direction,
