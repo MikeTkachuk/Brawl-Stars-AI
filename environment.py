@@ -408,7 +408,7 @@ class GymEnv(gym.Env):
 
                 time.sleep(0.4)
 
-        return reward, terminated, info
+        return float(reward), terminated, info
 
     def _parse_action_token(self, action):
         """

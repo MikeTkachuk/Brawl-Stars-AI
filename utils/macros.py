@@ -9,6 +9,9 @@ from typing import Union, List
 import mouse
 import keyboard
 
+import wandb
+import utils.grabscreen
+
 ctypes.windll.shcore.SetProcessDpiAwareness(2)  # https://github.com/boppreh/mouse/issues/122
 
 
@@ -131,12 +134,15 @@ class Macro:
         self.name = Path(load_path).stem
 
     def play(self):
+        screenshots = {"before_macro": wandb.Image(utils.grabscreen.grab_screen())}
         print(f"Macro.play: playing {self.name}")
         for i in range(len(self.events) - 1):
             play_event(self.events[i])
             time.sleep(self.events[i + 1]['time'] - self.events[i]['time'])
         play_event(self.events[-1])
         print(f"Macro.play: ended {self.name}")
+        screenshots["after_macro"] = wandb.Image(utils.grabscreen.grab_screen())
+        wandb.log(screenshots)
 
 
 if __name__ == "__main__":
