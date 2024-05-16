@@ -18,7 +18,6 @@ from gym import spaces
 from utils.grabscreen import grab_screen
 from utils.getkeys import key_check
 from utils.custom_ocr import save_templates, match
-from utils.misc import is_power_of_two
 from utils.macros import Macro
 from config import _relative_to_pixel
 from controls import act, reset_controls, exit_end_screen, start_battle, exit_defeated
@@ -125,7 +124,7 @@ class ScreenParser:
         proceed = _ocr_preproc(screen, proceed_region)
         proceed_text = match(cv.cvtColor(proceed, cv.COLOR_RGB2GRAY), self.char_database)
         return end_title_text, score_text, player_trophies_text, \
-               exit_end_screen_text, start_battle_text, defeated_text, proceed_text
+            exit_end_screen_text, start_battle_text, defeated_text, proceed_text
 
     def get_state(self):
         """
@@ -164,7 +163,7 @@ class ScreenParser:
                     region = _relative_to_pixel(region, self.main_screen)
                     cropper = (slice(region[1], region[1] + region[3]),
                                slice(region[0], region[0] + region[2]))
-                    spotlight_region = _ocr_preproc(screen, region, thresh=(190, 255), channels=(0,0,0))
+                    spotlight_region = _ocr_preproc(screen, region, thresh=(190, 255), channels=(0, 0, 0))
                     spotlight_region = cv.resize(spotlight_region, screen[cropper].shape[:-1][::-1])
                     screen[cropper] = 0.2 * screen[cropper] + 0.8 * spotlight_region
                 cv.imwrite(str(out_dir / f"{i}.jpg"), screen[..., ::-1])
@@ -258,13 +257,17 @@ class GymEnv(gym.Env):
         self.acting_process: ActingProcess = None
         self.done = False
         self.move_shot_anchors = move_shot_anchors if hasattr(move_shot_anchors, "__len__") else (
-                                                                                                 move_shot_anchors,) * 2
-        if not is_power_of_two(self.move_shot_anchors[0]) or not is_power_of_two(self.move_shot_anchors[1]):
-            raise ValueError('Num anchors that is not a power of 2 is not allowed.')
+                                                                                                     move_shot_anchors,) * 2
 
+        self.n_binary_actions = 3
         self.action_space = spaces.Discrete(
-            n=2 ** 4 * np.prod(self.move_shot_anchors))  # 2^#binary_actions * prod(#anchors)
+            n=2 ** self.n_binary_actions * (1 + self.move_shot_anchors[0]) * self.move_shot_anchors[1]
+        )  # 2^#binary_actions * (move_anchors + no_move) * shot_anchors
+        self.bit_space = (len(bin(self.move_shot_anchors[0])) - 2,
+                          len(bin(self.move_shot_anchors[1] - 1)) - 2)  # anchors only
         self.continuous_action_space = spaces.Box(0, 1, shape=(3,))
+
+        self._action_binary_maps = None
 
     def _init_control_process(self):
         """
@@ -392,7 +395,8 @@ class GymEnv(gym.Env):
                     if got_reward or reward_scan_patience > 5:
                         if reward_scan_patience > 5:
                             self.parser.save_region(region='end_screen_title_region')
-                            warnings.warn(f"Failed to properly parse the end screen. Returning an error reward of {reward}")
+                            warnings.warn(
+                                f"Failed to properly parse the end screen. Returning an error reward of {reward}")
                         exit_end_screen()
                     else:
                         reward_scan_patience += 1
@@ -410,37 +414,68 @@ class GymEnv(gym.Env):
 
         return float(reward), terminated, info
 
-    def _parse_action_token(self, action):
+    def _action_map_binary(self, token, input_binary=False):
+        """
+        Converts between binary and consecutive formats. Binary is ready to be split into bins and parsed.
+        Consecutive is basically an id of an action.
+        :param token: int, action token
+        :param input_binary: if True, assumes token to be in binary format
+        :return: token in the opposite format
+        """
+        if self._action_binary_maps is None:
+            b_tokens = []
+            total_bits = self.n_binary_actions + sum(self.bit_space)
+            for i in range(2 ** total_bits):
+                bin_i = bin(i)[2:]
+                bin_i = '0' * (total_bits - len(bin_i)) + bin_i
+                bin_move_anchor = bin_i[self.n_binary_actions:][:self.bit_space[0]]
+                if int(bin_move_anchor, 2) > self.move_shot_anchors[0]:
+                    continue
+                bin_shot_anchor = bin_i[-self.bit_space[1]:]
+                if int(bin_shot_anchor, 2) >= self.move_shot_anchors[1]:
+                    continue
+                b_tokens.append(i)
+            c_tokens = range(len(b_tokens))
+            self._action_binary_maps = (
+                dict(zip(c_tokens, b_tokens)),
+                dict(zip(b_tokens, c_tokens))
+            )
+
+        if input_binary:
+            return self._action_binary_maps[1][token]
+        else:
+            return self._action_binary_maps[0][token]
+
+    def parse_action_token(self, action):
         """
         Parse 1 multi-binary and 3 continuous action values
         :param action: array-like of action values
         :return: dict of parsed actions
         """
-        assert len(action) == 4  # 1 token + 3 continuous [0,1]: (move, shot, strength)
-        assert 0 <= action[0] < self.action_space.n
-        bins = bin(int(action[0]))[2:]
-        desired_len = len(bin(self.action_space.n - 1)) - 2
-        bins = '0' * (desired_len - len(bins)) + bins  # pad with 0
+        action = np.array(action)
+        assert len(action) == 4, "Wrong action format"  # 1 token + 3 continuous [0,1]: (move, shot, strength)
+        assert self.n_binary_actions == 3, "Only 3 binary actions supported. See docs"
+        assert 0 <= action[0] < self.action_space.n, "Action token out of bound"
+        bin_action = self._action_map_binary(action[0])
+        bins = bin(int(bin_action))[2:]
+        total_bits = self.n_binary_actions + sum(self.bit_space)
+        bins = '0' * (total_bits - len(bins)) + bins  # pad with 0
 
-        make_move, make_shot, super_ability, use_gadget = bins[:4]
+        make_shot, super_ability, use_gadget = bins[:self.n_binary_actions]
 
-        move_n_bits = len(bin(self.move_shot_anchors[0] - 1)) - 2
-        move_anchor = int(bins[4:4 + move_n_bits], 2)
-        assert len(bins[4:4 + move_n_bits]) == move_n_bits  # just to check myself
-
-        shot_n_bits = len(bin(self.move_shot_anchors[1] - 1)) - 2
-        shot_anchor = int(bins[4 + move_n_bits: 4 + move_n_bits + shot_n_bits], 2)
-        assert len(bins[4 + move_n_bits: 4 + move_n_bits + shot_n_bits]) == shot_n_bits
+        move_anchor = int(bins[self.n_binary_actions:][:self.bit_space[0]], 2)
+        shot_anchor = int(bins[-self.bit_space[1]:], 2)
 
         def _get_anchor_dir(anchor_num, total, shift=0.0):
+            assert anchor_num < total
             angle_shift = 1 / total * 2 * np.pi * (shift - 0.5)  # assumes shift is in [0, 1]
             angle = anchor_num / total * 2 * np.pi + angle_shift
             anchor = np.array([np.cos(angle), np.sin(angle)])
             return anchor
 
         parsed_action = {
-            'direction': _get_anchor_dir(move_anchor, self.move_shot_anchors[0], action[1]),
-            'make_move': int(make_move),
+            'direction': _get_anchor_dir(move_anchor - 1, self.move_shot_anchors[0], action[1]),  # 0 is no_move
+            'make_move': int(move_anchor > 0),
             'make_shot': int(make_shot),
             'shoot_direction': _get_anchor_dir(shot_anchor, self.move_shot_anchors[1], action[2]),
             'shoot_strength': action[3],
@@ -449,8 +484,28 @@ class GymEnv(gym.Env):
         }
         return parsed_action
 
+    def create_action_token(self, make_move, make_shot, super_ability, use_gadget,
+                            move_anchor, shot_anchor, ):
+        assert 0 <= move_anchor < self.move_shot_anchors[0]
+        assert 0 <= shot_anchor < self.move_shot_anchors[1]
+        move_anchor = move_anchor + 1 if make_move else 0
+
+        bin_str = ''
+        for i in [make_shot, super_ability, use_gadget]:
+            bin_str += str(int(i))
+
+        anch_bin = bin(move_anchor)[2:]
+        bin_str += '0' * (self.bit_space[0] - len(anch_bin)) + anch_bin
+
+        anch_bin = bin(shot_anchor)[2:]
+        bin_str += '0' * (self.bit_space[1] - len(anch_bin)) + anch_bin
+
+        assert len(bin_str) == self.n_binary_actions + sum(self.bit_space), "Incorrect token range"
+        b_token = int(bin_str, 2)
+        return self._action_map_binary(b_token, input_binary=True)
+
     def _obs_preproc(self, obs):
-        return cv.resize(obs, (192, 192)).astype(np.float32)
+        return cv.resize(obs, (256, 256)).astype(np.float32)
 
     def step(self, action: Union[dict, Any]):
         """
@@ -481,7 +536,7 @@ class GymEnv(gym.Env):
             return None
 
         if not isinstance(action, dict):
-            action = self._parse_action_token(action)
+            action = self.parse_action_token(action)
 
         self.acting_process.update_data(action)
         screen, parse_results = self.parser.get_state()
