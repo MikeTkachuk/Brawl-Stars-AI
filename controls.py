@@ -1,4 +1,5 @@
 import time
+from typing import Optional
 
 from utils.directkeys import PressKey, ReleaseKey
 import config
@@ -6,6 +7,7 @@ from config import _relative_to_pixel
 import numpy as np
 import mouse
 import ctypes
+from threading import Thread, Event
 
 ctypes.windll.shcore.SetProcessDpiAwareness(2)  # https://github.com/boppreh/mouse/issues/122
 
@@ -18,15 +20,15 @@ def straight():
 
 
 def left():
-    ReleaseKey(config.forward)
     PressKey(config.left)
+    ReleaseKey(config.forward)
     ReleaseKey(config.backward)
     ReleaseKey(config.right)
 
 
 def right():
-    ReleaseKey(config.forward)
     PressKey(config.right)
+    ReleaseKey(config.forward)
     ReleaseKey(config.left)
     ReleaseKey(config.backward)
 
@@ -145,7 +147,7 @@ def shooting_routine(old, new):
         x_center, y_center = _relative_to_pixel(center, config.main_screen, absolute=True)
         cos, sin = np.array(dir_xy) / np.linalg.norm(dir_xy)
         x = cos * config.joystick_radius * strength + x_center
-        y = sin * config.joystick_radius * strength + y_center
+        y = -sin * config.joystick_radius * strength + y_center
         mouse.move(x, y, duration=movement_duration)
 
     def _reset_joystick(center):
@@ -218,6 +220,51 @@ def act(
     # use throwing only when specified&
     # multi-shot?
 
+    class MovementTask:
+        def __init__(self):
+            self.movements = ()
+            self.update_event = Event()
+
+        def update(self, new_movements: tuple):
+            self.movements = new_movements
+            self.update_event.set()
+
+        def run_once(self):
+            for func in list(self.movements):  # make a copy to do changes in parallel
+                if self.update_event.is_set():
+                    self.update_event.clear()
+                    break
+                func()
+                time.sleep(0.1)
+
+        def run(self):
+            while True:
+                self.run_once()
+
+    class ShootingTask:
+        def __init__(self):
+            self.job: Optional[Thread] = None
+
+        @staticmethod
+        def _job_func(*args, **kwargs):
+            try:
+                shooting_routine(*args, **kwargs)
+            except RuntimeError:
+                pass
+
+        def run(self, *args, **kwargs):
+            if self.job is not None:
+                ret = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(self.job.native_id),
+                                                                 ctypes.py_object(RuntimeError))
+                if ret:
+                    mouse.release()
+                self.job.join()
+            self.job = Thread(target=self._job_func, args=args, kwargs=kwargs, daemon=True)
+            self.job.start()
+
+    movement_task = MovementTask()
+    shooting_task = ShootingTask()
+
     # init act.vars
     def init():
         store_old = (act.make_shot_local,
@@ -249,13 +296,12 @@ def act(
             PressKey(config.gadget)
             ReleaseKey(config.gadget)
 
-        shooting_routine(store_old, (act.make_shot_local,
-                                     act.shoot_direction_x_local,
-                                     act.shoot_direction_y_local,
-                                     act.shoot_strength_local,
-                                     act.super_ability_local,))
-
-        return movements_
+        shooting_task.run(store_old, (act.make_shot_local,
+                                      act.shoot_direction_x_local,
+                                      act.shoot_direction_y_local,
+                                      act.shoot_strength_local,
+                                      act.super_ability_local,))
+        movement_task.update(movements_)
 
     def _make_args_local_copy():
         direction_x_local = float(direction.x)
@@ -296,14 +342,13 @@ def act(
 
         act.use_gadget_local
     ) = _make_args_local_copy()
-    movement_controls = init()
+    init()
+    movement_worker = Thread(target=movement_task.run, daemon=True)
+    movement_worker.start()
     while True:
         # inside loop
         if changed.value:
             with changed.get_lock():
                 changed.value = 0
-            movement_controls = init()
-
-        for func in movement_controls:
-            func()
-            time.sleep(0.1)
+            init()
+        time.sleep(0.01)

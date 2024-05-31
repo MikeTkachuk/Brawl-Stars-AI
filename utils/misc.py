@@ -67,27 +67,6 @@ class ActionTokenizer:
         else:
             return self._action_binary_maps[0][token]
 
-    def split_into_bins(self, token: int, input_binary=False, decode_move_anchor=True):
-        if not input_binary:
-            token = self._action_map_binary(token, input_binary=False)
-        out = []
-        bin_t = bin(token)[2:]
-        total_bits = self.n_binary_actions + sum(self.bit_space)
-        bin_t = '0' * (total_bits - len(bin_t)) + bin_t  # pad with 0
-
-        for i in range(self.n_binary_actions):
-            out.append(int(bin_t[i]))
-        bin_t = bin_t[self.n_binary_actions:]
-        move_anchor = int(bin_t[:self.bit_space[0]], 2)
-        bin_t = bin_t[self.bit_space[0]:]
-        shot_anchor = int(bin_t[:self.bit_space[1]], 2)
-        out += [move_anchor, shot_anchor]
-        if decode_move_anchor:  # add legacy make_move
-            out = [int(move_anchor > 0)] + out
-            if move_anchor > 0:
-                out[-2] -= 1  # make move anchors in 0-n
-        return out
-
     def create_action_token(self, make_move, make_shot, super_ability, use_gadget,
                             move_anchor, shot_anchor, ):
         assert 0 <= move_anchor < self.move_shot_anchors[0]
@@ -108,9 +87,28 @@ class ActionTokenizer:
         b_token = int(bin_str, 2)
         return self._action_map_binary(b_token, input_binary=True)
 
+    def split_into_bins(self, token: int, input_binary=False, decode_move_anchor=True):
+        if not input_binary:
+            token = self._action_map_binary(token, input_binary=False)
+        out = []
+        bin_t = bin(token)[2:]
+        total_bits = self.n_binary_actions + sum(self.bit_space)
+        bin_t = '0' * (total_bits - len(bin_t)) + bin_t  # pad with 0
+
+        for i in range(self.n_binary_actions):
+            out.append(int(bin_t[i]))
+        move_anchor = int(bin_t[self.n_binary_actions:][:self.bit_space[0]], 2)
+        shot_anchor = int(bin_t[-self.bit_space[1]:], 2)
+        out += [move_anchor, shot_anchor]
+        if decode_move_anchor:  # add legacy make_move
+            out = [int(move_anchor > 0)] + out
+            if move_anchor > 0:
+                out[-2] -= 1  # make move anchors in 0-n
+        return out
+
     def parse_action_token(self, action):
         """
-        Parse 1 multi-binary and 3 continuous action values
+        Parse 1 consecutive action token and 3 continuous action values
         :param action: array-like of action values
         :return: dict of parsed actions
         """
@@ -135,7 +133,7 @@ class ActionTokenizer:
             return anchor
 
         parsed_action = {
-            'direction': _get_anchor_dir(move_anchor - 1, self.move_shot_anchors[0], action[1]),  # 0 is no_move
+            'direction': _get_anchor_dir(max(move_anchor - 1, 0), self.move_shot_anchors[0], action[1]),  # 0 is no_move
             'make_move': int(move_anchor > 0),
             'make_shot': int(make_shot),
             'shoot_direction': _get_anchor_dir(shot_anchor, self.move_shot_anchors[1], action[2]),

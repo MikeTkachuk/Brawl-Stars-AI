@@ -142,7 +142,8 @@ class Macro:
         play_event(self.events[-1])
         print(f"Macro.play: ended {self.name}")
         screenshots["after_macro"] = wandb.Image(utils.grabscreen.grab_screen())
-        wandb.log(screenshots)
+        if wandb.run:
+            wandb.log(screenshots)
 
 
 if __name__ == "__main__":

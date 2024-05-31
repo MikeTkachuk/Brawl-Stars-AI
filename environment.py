@@ -3,10 +3,11 @@ import warnings
 from pathlib import Path
 import time
 import re
-from typing import Optional, Union, List, Any
+from typing import Optional, Union, List, Any, Dict
 from multiprocessing import Process
 from multiprocessing.sharedctypes import Value
 from ctypes import Structure, c_double
+import psutil
 
 import cv2 as cv
 from tqdm import tqdm
@@ -223,6 +224,7 @@ class ActingProcess:
         if self._exited or self._started:
             raise RuntimeError("Repeated initialization is not supported.")
         self.proc.start()
+        psutil.Process(pid=self.proc.pid).nice(psutil.HIGH_PRIORITY_CLASS)
         self._started = True
         print('New control process started.')
 
@@ -448,7 +450,7 @@ class GymEnv(gym.Env):
 
     def parse_action_token(self, action):
         """
-        Parse 1 multi-binary and 3 continuous action values
+        Parse 1 consecutive token and 3 continuous action values
         :param action: array-like of action values
         :return: dict of parsed actions
         """
@@ -474,7 +476,7 @@ class GymEnv(gym.Env):
             return anchor
 
         parsed_action = {
-            'direction': _get_anchor_dir(move_anchor - 1, self.move_shot_anchors[0], action[1]),  # 0 is no_move
+            'direction': _get_anchor_dir(max(move_anchor - 1, 0), self.move_shot_anchors[0], action[1]),  # 0 is no_move
             'make_move': int(move_anchor > 0),
             'make_shot': int(make_shot),
             'shoot_direction': _get_anchor_dir(shot_anchor, self.move_shot_anchors[1], action[2]),
@@ -504,10 +506,29 @@ class GymEnv(gym.Env):
         b_token = int(bin_str, 2)
         return self._action_map_binary(b_token, input_binary=True)
 
+    def split_into_bins(self, token: int, input_binary=False, decode_move_anchor=True):
+        if not input_binary:
+            token = self._action_map_binary(token, input_binary=False)
+        out = []
+        bin_t = bin(token)[2:]
+        total_bits = self.n_binary_actions + sum(self.bit_space)
+        bin_t = '0' * (total_bits - len(bin_t)) + bin_t  # pad with 0
+
+        for i in range(self.n_binary_actions):
+            out.append(int(bin_t[i]))
+        move_anchor = int(bin_t[self.n_binary_actions:][:self.bit_space[0]], 2)
+        shot_anchor = int(bin_t[-self.bit_space[1]:], 2)
+        out += [move_anchor, shot_anchor]
+        if decode_move_anchor:  # add legacy make_move
+            out = [int(move_anchor > 0)] + out
+            if move_anchor > 0:
+                out[-2] -= 1  # make move anchors in 0-n
+        return out
+
     def _obs_preproc(self, obs):
         return cv.resize(obs, (256, 256)).astype(np.float32)
 
-    def step(self, action: Union[dict, Any]):
+    def step(self, action: Union[dict, Any]):  # todo: shift to step -> None and request_state()->obs,reward, done
         """
         Update the action params valid until the next step call. Return the screen observed at the same time
 
@@ -522,7 +543,7 @@ class GymEnv(gym.Env):
 
             If not dict it is parsed separately as an array-like:
                 1st place - action token
-                nth others - continuous params
+                n others - continuous params
         :return: np.ndarray. screen img
         """
         if config.terminate_program in key_check():  # exits env if the user pressed the specified key
@@ -558,7 +579,7 @@ class GymEnv(gym.Env):
         :return: observation after reset
         """
 
-        print('environment.GymEnv.reset: reset called')
+        print('GymEnv.reset: reset called')
         if not self.done:
             patience_wrapper(lambda: self._interpret_parsed_screen()[1],
                              interval=1,
