@@ -312,7 +312,9 @@ class ACTrainer:
         # self._replay = self._get_placeholder_replay(length=250, mask=False)  # debug memory etc
 
         self.actions, self.rewards, self.dones, self.outputs, self.mask_paddings = [], [], [], [], []
-        self.observations = [self.env.reset()] if not self.replay_only else []
+        if not self.replay_only:
+            self.env.reset()
+        self.observations = []
         self.actor.reset(1 if collection else self.batch_size)
         if self.replay_only and burn_in:
             self.burn_in(self.cfg.training.actor_critic.burn_in)
@@ -357,6 +359,8 @@ class ACTrainer:
         assert not self.replay_only, "Can't call env step in replay mode. Use episode_end instead"
         if collection:
             return self._collection_step()
+        obs, reward, done, _ = self.env.request_state()
+        self.observations.append(obs)
 
         curr_obs = torch.tensor(self.observations[-1].transpose(2, 0, 1)).unsqueeze(0).float() / 255.0
         if self.episode_step < self._replay['ends'].size(1):
@@ -373,6 +377,11 @@ class ACTrainer:
                                         torch.zeros_like(self._replay['actions_continuous'][:, -1])], dim=-1)
             replay_rewards = torch.zeros_like(self._replay['rewards'][:, -1])
             replay_ends = torch.ones_like(self._replay['ends'][:, -1])
+
+        full_rewards = torch.cat([torch.tensor([reward]), replay_rewards], dim=0)
+        self.rewards.append(full_rewards)
+        full_ends = torch.cat([torch.tensor([done]), replay_ends], dim=0)
+        self.dones.append(full_ends)
 
         full_obs = torch.cat([curr_obs, replay_obs], dim=0)
         full_mask_padding = torch.cat([torch.tensor([True]), replay_mask_padding], dim=0)
@@ -392,13 +401,7 @@ class ACTrainer:
         self.actions.append(full_action)
         self.outputs.append(output)
 
-        obs, reward, done, _ = self.env.step(action_sigmoid.cpu().detach())
-
-        self.observations.append(obs)
-        full_rewards = torch.cat([torch.tensor([reward]), replay_rewards], dim=0)
-        self.rewards.append(full_rewards)
-        full_ends = torch.cat([torch.tensor([done]), replay_ends], dim=0)
-        self.dones.append(full_ends)
+        self.env.step(action_sigmoid.cpu().detach(), return_state=False)
 
         self.episode_step += 1
         if reward == -100 or self.episode_step > 400:
@@ -409,6 +412,13 @@ class ACTrainer:
 
     @torch.no_grad()
     def _collection_step(self):
+        obs, reward, done, _ = self.env.request_state()
+        self.observations.append(obs)
+        full_rewards = torch.tensor([reward])
+        self.rewards.append(full_rewards)
+        full_ends = torch.tensor([done])
+        self.dones.append(full_ends)
+
         curr_obs = torch.tensor(self.observations[-1].transpose(2, 0, 1)).unsqueeze(0).float() / 255.0
         full_mask_padding = torch.tensor([True])
         self.mask_paddings.append(full_mask_padding)
@@ -429,13 +439,7 @@ class ACTrainer:
         self.actions.append(action_raw)
         self.outputs.append(output)
 
-        obs, reward, done, _ = self.env.step(action_sigmoid.cpu().detach())
-
-        self.observations.append(obs)
-        full_rewards = torch.tensor([reward])
-        self.rewards.append(full_rewards)
-        full_ends = torch.tensor([done])
-        self.dones.append(full_ends)
+        self.env.step(action_sigmoid.cpu().detach(), return_state=False)
 
         self.episode_step += 1
         if reward == -100 or self.episode_step > 400:
@@ -549,7 +553,6 @@ class ACTrainer:
             self.metrics["collection/episode_length"] = self.episode_step
 
             # pop trailing obs
-            self.observations.pop(-1)
             self.dataset.add_episode(
                 self._create_episode()
             )

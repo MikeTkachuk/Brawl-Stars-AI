@@ -528,7 +528,14 @@ class GymEnv(gym.Env):
     def _obs_preproc(self, obs):
         return cv.resize(obs, (256, 256)).astype(np.float32)
 
-    def step(self, action: Union[dict, Any]):  # todo: shift to step -> None and request_state()->obs,reward, done
+    def request_state(self):
+        screen, parse_results = self.parser.get_state()
+        reward, terminated, info = self._interpret_parsed_screen(parse_results)
+        obs = self._obs_preproc(screen)
+        self.done = terminated
+        return obs, reward, terminated, info
+
+    def step(self, action: Union[dict, Any], return_state=True):
         """
         Update the action params valid until the next step call. Return the screen observed at the same time
 
@@ -544,27 +551,25 @@ class GymEnv(gym.Env):
             If not dict it is parsed separately as an array-like:
                 1st place - action token
                 n others - continuous params
+        :param return_state: bool, if True, returns (obs, reward, done, info). Otherwise, use request_state separately.
         :return: np.ndarray. screen img
         """
         if config.terminate_program in key_check():  # exits env if the user pressed the specified key
             self.__exit__(soft=False)
             exit()
 
-        if not self.acting_process.is_running:  # if resume is needed
-            self._init_control_process()
-
         if self.done:
             return None
+
+        if not self.acting_process.is_running:  # if resume is needed mid-episode
+            self._init_control_process()
 
         if not isinstance(action, dict):
             action = self.parse_action_token(action)
 
         self.acting_process.update_data(action)
-        screen, parse_results = self.parser.get_state()
-        reward, terminated, info = self._interpret_parsed_screen(parse_results)
-        obs = self._obs_preproc(screen)
-        self.done = terminated
-        return obs, reward, terminated, info
+        if return_state:
+            return self.request_state()
 
     def reset(
             self,
@@ -606,7 +611,7 @@ class GymEnv(gym.Env):
                          timeout_steps=timeout)
 
         self._init_control_process()
-        time.sleep(10)  # skip battle prep
+        time.sleep(10)  # skip battle prep # todo parse battle start screen instead
         self.done = False
         observation = self._obs_preproc(self.parser.get_state()[0])
         return observation
