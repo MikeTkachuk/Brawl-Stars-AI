@@ -36,17 +36,9 @@ WEIGHT_QUANTILE = 0.5  # value loss quantile to assign episode weights
 RANDOM_ACTION = 0.01  # proba
 POSITIVE_WEIGHT = 1.0  # weigh positive updates (divides neg ones)
 
-# align weights so that positive episode with loss 0.1 was on par with the
-# negative one via loss + neg_ep_w_shift
-NEGATIVE_EPISODE_WEIGHT_SHIFT = 0.0  # TODO maybe increase for exploration
 
 # set action_limit_mask to False and the desired actions to lock them during the run.
 
-# make_move, make_shot, super_ability, use_gadget, move_anchor, shot_anchor
-ACTION_NAMES = ["make_move", "make_shot", "super_ability", "use_gadget", "move_anchor", "shot_anchor"]
-ACTION_LOCK_MASK = torch.tensor([True, True, True, False, True, False]).to(device)
-ACTION_LOGIT_LOCK_MASK = torch.repeat_interleave(ACTION_LOCK_MASK, torch.tensor([1, 1, 1, 1, 4, 4]).to(device))
-ACTION_LOCK = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).to(device)
 # move_shift, shot_shift, shot_strength
 ACTION_C_NAMES = ["move_shift", "shot_shift", "shot_strength"]
 ACTION_C_LOCK_MASK = torch.tensor([False, False, False]).to(device)
@@ -79,7 +71,6 @@ class RateLimiter:
                 out = func(*args, **kwargs)
 
                 extra_time = (1 / calls_per_second) - (time.time() - self._last_call_timestamp)
-                print(extra_time)
                 if extra_time > 0:
                     time.sleep(extra_time)
                 elif extra_time > -outlier_threshold:
@@ -298,7 +289,7 @@ class ACTrainer:
                 self._replay = sample_batch([(self.dataset.get_episode(i), None) for i in disk_ids],
                                             self.dataset.resolution,
                                             sample_segments=True,
-                                            segment_len=self.cfg.common.sequence_length,
+                                            segment_len=self.cfg.training.actor_critic.sequence_length,
                                             end_proba=0.1)[0]
             self.metrics["actor_critic/train/batch_mean_reward"] = sum([
                 r[torch.nonzero(r)[-1]].item() if torch.count_nonzero(r) else 0.0 for r in self._replay["rewards"]
@@ -307,7 +298,8 @@ class ACTrainer:
             print("replay sample elapsed: ", time.time() - start_)
         else:
             self._update_weights = np.ones(self.batch_size)
-            self._replay = self._get_placeholder_replay()
+            if not collection:
+                self._replay = self._get_placeholder_replay()
 
         # self._replay = self._get_placeholder_replay(length=250, mask=False)  # debug memory etc
 
@@ -366,14 +358,14 @@ class ACTrainer:
         if self.episode_step < self._replay['ends'].size(1):
             replay_obs = self._replay['observations'][:, self.episode_step]
             replay_mask_padding = self._replay['mask_padding'][:, self.episode_step]
-            replay_actions = torch.cat([self._replay['actions'][:, self.episode_step],
+            replay_actions = torch.cat([self._replay['actions'][:, self.episode_step, None],
                                         self._replay['actions_continuous'][:, self.episode_step]], dim=-1)
             replay_rewards = self._replay['rewards'][:, self.episode_step]
             replay_ends = self._replay['ends'][:, self.episode_step]
         else:
             replay_obs = torch.zeros_like(self._replay['observations'][:, -1])
             replay_mask_padding = torch.zeros_like(self._replay['mask_padding'][:, -1])
-            replay_actions = torch.cat([torch.zeros_like(self._replay['actions'][:, -1]),
+            replay_actions = torch.cat([torch.zeros_like(self._replay['actions'][:, -1, None]),
                                         torch.zeros_like(self._replay['actions_continuous'][:, -1])], dim=-1)
             replay_rewards = torch.zeros_like(self._replay['rewards'][:, -1])
             replay_ends = torch.ones_like(self._replay['ends'][:, -1])
@@ -390,11 +382,8 @@ class ACTrainer:
                                     mask_padding=full_mask_padding.to(device))
 
         # sample action from s_t
-        action, action_cont = self.actor.sample_actions(output, eps=RANDOM_ACTION)
-        action = torch.where(ACTION_LOCK_MASK, action[0], ACTION_LOCK)
-        action_cont = torch.where(ACTION_C_LOCK_MASK, action_cont[0], ACTION_C_LOCK)
-        action_raw = torch.cat([action.flatten(), action_cont.flatten()]).reshape(1, -1)
-        action_token = self.env.create_action_token(*action.int().cpu().numpy().flatten())
+        action_token, action_cont = self.actor.sample_actions(output, eps=RANDOM_ACTION)
+        action_raw = torch.cat([action_token.flatten(), action_cont.flatten()]).reshape(1, -1)
         action_sigmoid = torch.cat([torch.tensor([action_token]).to(device),
                                     torch.sigmoid(action_cont).flatten()])
         full_action = torch.cat([action_raw, replay_actions.to(device)], dim=0)
@@ -426,13 +415,9 @@ class ACTrainer:
                                     mask_padding=full_mask_padding.to(device))
 
         # sample action from s_t
-        action, action_cont = self.actor.sample_actions(output, eps=RANDOM_ACTION)
-        # lock actions
-        action = torch.where(ACTION_LOCK_MASK, action[0], ACTION_LOCK)
-        action_cont = torch.where(ACTION_C_LOCK_MASK, action_cont[0], ACTION_C_LOCK)
+        action_token, action_cont = self.actor.sample_actions(output, eps=RANDOM_ACTION)
         # compute token and sigmoid actions
-        action_raw = torch.cat([action.flatten(), action_cont.flatten()]).reshape(1, -1)
-        action_token = self.env.create_action_token(*action.int().cpu().numpy().flatten())
+        action_raw = torch.cat([action_token.flatten(), action_cont.flatten()]).reshape(1, -1)
         action_sigmoid = torch.cat([torch.tensor([action_token]).to(device),
                                     torch.sigmoid(action_cont).flatten()])
 
@@ -453,7 +438,7 @@ class ACTrainer:
         obs = np.stack(self.observations, axis=0)
         obs = torch.ByteTensor(obs).permute(0, 3, 1, 2).contiguous()
         actions = torch.LongTensor(
-            torch.stack(self.actions, dim=1)[0, :self.episode_step, ..., :-3].long().cpu())
+            torch.stack(self.actions, dim=1)[0, :self.episode_step, ..., 0].long().cpu())
         actions_continuous = torch.FloatTensor(
             torch.stack(self.actions, dim=1)[0, :self.episode_step, ..., -3:].cpu())
         rewards = torch.FloatTensor(torch.stack(self.rewards, dim=1)[0, :self.episode_step].float())
@@ -474,7 +459,7 @@ class ACTrainer:
     def _get_placeholder_replay(self, length=1, mask=True):
         return {
             'observations': torch.zeros((self.batch_size - 1, length, 3, 192, 192)),
-            'actions': torch.zeros((self.batch_size - 1, length, 6)),
+            'actions': torch.zeros((self.batch_size - 1, length, 1)),
             'actions_continuous': torch.zeros((self.batch_size - 1, length, 3)),
             'rewards': torch.zeros((self.batch_size - 1, length)),
             'ends': torch.ones((self.batch_size - 1, length), dtype=torch.bool) if mask else
@@ -526,7 +511,7 @@ class ACTrainer:
                 output = self.actor.forward(obs.to(device),
                                             mask_padding=full_mask_padding.to(device))
                 self.outputs.append(output)
-                replay_actions = torch.cat([self._replay['actions'][:, i],
+                replay_actions = torch.cat([self._replay['actions'][:, i, None],
                                             self._replay['actions_continuous'][:, i]], dim=-1).to(device)
                 full_actions = torch.cat([torch.zeros_like(replay_actions)[[0]], replay_actions])
                 self.actions.append(full_actions)
@@ -559,7 +544,7 @@ class ACTrainer:
         actual_batch_size = len(self.dones[-1])
         episode_output = ImagineOutput(
             observations=None,
-            actions=torch.stack(self.actions, dim=1)[..., :-3].to(device),
+            actions=torch.stack(self.actions, dim=1)[..., 0].to(device),
             actions_continuous=torch.stack(self.actions, dim=1)[..., -3:].to(device),
             logits_actions=torch.cat([out.logits_actions for out in self.outputs], dim=1).to(device),
             continuous_means=torch.cat([out.mean_continuous for out in self.outputs], dim=1).to(device),
@@ -574,12 +559,12 @@ class ACTrainer:
             # log action and value histograms
             self.metrics["values"] = self._create_hist(episode_output.values[mask_paddings], names=["value"],
                                                        mean_line=True)
-            self.metrics["binary_logits"] = self._create_hist(
-                episode_output.logits_actions[mask_paddings][..., :4], names=ACTION_NAMES[:4])
-            self.metrics["anchor_logits"] = self._create_hist(torch.stack([
-                episode_output.logits_actions[mask_paddings][..., 4:8],
-                episode_output.logits_actions[mask_paddings][..., 8:],
-            ], dim=-1), names=ACTION_NAMES[4:])
+            # self.metrics["binary_logits"] = self._create_hist(
+            #     episode_output.logits_actions[mask_paddings][..., :4], names=ACTION_NAMES[:4])
+            # self.metrics["anchor_logits"] = self._create_hist(torch.stack([
+            #     episode_output.logits_actions[mask_paddings][..., 4:8],
+            #     episode_output.logits_actions[mask_paddings][..., 8:],
+            # ], dim=-1), names=ACTION_NAMES[4:])
             self.metrics["means"] = self._create_hist(episode_output.continuous_means[mask_paddings],
                                                       names=ACTION_C_NAMES)
             self.metrics["stds"] = self._create_hist(episode_output.continuous_stds[mask_paddings],
@@ -638,7 +623,7 @@ class ACTrainer:
                 mask_paddings=mask_paddings,
                 gamma=self.cfg.training.actor_critic.gamma,
                 lambda_=lambda_,
-            )
+            )[:, :-1]
             lambda_returns = compute_masked_lambda_returns(
                 rewards=outputs.rewards,
                 values=values,
@@ -646,15 +631,13 @@ class ACTrainer:
                 mask_paddings=mask_paddings,
                 gamma=self.cfg.training.actor_critic.gamma,
                 lambda_=lambda_,
-            )
-
-        to_print = torch.stack([values_raw[0], lambda_returns_raw[0]], dim=0).T[mask_paddings[0]]
-        print("values and returns\n", to_print.cpu().detach().numpy())
+            )[:, :-1]
+        mask_paddings = mask_paddings[:, :-1]
 
         (log_probs, entropy), (log_probs_continuous, entropy_cont) = self.actor.get_proba_entropy(outputs)
 
         update_weight = torch.tensor(self._update_weights, device=device).reshape(self.batch_size, 1)
-        advantage_factor = (lambda_returns_raw - values_raw.detach()) / values_std.detach()  # match loss_values scale
+        advantage_factor = (lambda_returns_raw - values_raw.detach()[:, :-1]) / values_std.detach()  # match loss_values scale
         # print(advantage_factor[1][mask_paddings[1]])
         # self.metrics["advantages"] = self._create_hist(advantage_factor[mask_paddings], mean_line=True)
         # self.metrics["weighted_advantages"] = self._create_hist((update_weight * advantage_factor)[mask_paddings],
@@ -667,19 +650,18 @@ class ACTrainer:
         # loss_actions_masked = torch.masked_select(update_weight.unsqueeze(-1) * loss_actions,
         #                                           mask_paddings.unsqueeze(-1)).mean()
         loss_actions_masked = torch.masked_select(torch.where(
-            advantage_factor.unsqueeze(-1) >= 0,
-            -1 * (log_probs * advantage_factor.unsqueeze(-1))[..., ACTION_LOCK_MASK],
-            (torch.log(1 - torch.exp(log_probs)) * advantage_factor.unsqueeze(-1))[..., ACTION_LOCK_MASK]
-        ), mask_paddings.unsqueeze(-1)).mean()
+            advantage_factor >= 0,
+            -1 * (log_probs * advantage_factor),
+            (torch.log(1 - torch.exp(log_probs)) * advantage_factor)
+        ), mask_paddings).mean()
         self.metrics[f"actor_critic/{mode}/custom_weighted_actions"] = loss_actions_masked.item()
         self.metrics[f"actor_critic/{mode}/custom_actions"] = torch.masked_select(torch.where(
-            advantage_factor.unsqueeze(-1) >= 0,
-            -log_probs[..., ACTION_LOCK_MASK],
-            -torch.log(1 - torch.exp(log_probs))[..., ACTION_LOCK_MASK]
-        ), mask_paddings.unsqueeze(-1)).mean().item()
+            advantage_factor >= 0,
+            -log_probs,
+            -torch.log(1 - torch.exp(log_probs))
+        ), mask_paddings).mean().item()
 
-        loss_continuous_actions = -1 * (log_probs_continuous.clamp(-5, 5) * advantage_factor.unsqueeze(-1))[
-            ..., ACTION_C_LOCK_MASK]
+        loss_continuous_actions = -1 * (log_probs_continuous.clamp(-5, 5) * advantage_factor.unsqueeze(-1))
         loss_continuous_actions_masked = torch.masked_select(update_weight.unsqueeze(-1) * loss_continuous_actions,
                                                              mask_paddings.unsqueeze(-1)).mean()
         # self.metrics["actor_critic/train/custom_continuous"] = torch.masked_select(torch.where(
@@ -689,19 +671,18 @@ class ACTrainer:
         # ), mask_paddings.unsqueeze(-1)).mean().item()
         # todo
         loss_entropy = torch.masked_select(
-            - 0 * self.cfg.training.actor_critic.entropy_weight * torch.log(entropy[..., ACTION_LOCK_MASK]),
-            mask_paddings.unsqueeze(-1)).mean() + \
+            - 0 * self.cfg.training.actor_critic.entropy_weight * torch.log(entropy),
+            mask_paddings).mean() + \
                        torch.masked_select(
                            # logit l2 regularization loss. cat(logits=[10,10,-10,-10]).entropy() is 0.69!!
                            self.cfg.training.actor_critic.entropy_weight *
-                           torch.where(outputs.logits_actions.abs() > 2, outputs.logits_actions, 0)[
-                               ..., ACTION_LOGIT_LOCK_MASK] ** 2,
-                           mask_paddings.unsqueeze(-1)
+                           torch.where(outputs.logits_actions.abs() > 2, outputs.logits_actions, 0)[:, :-1] ** 2,
+                           mask_paddings[..., None]
                        ).mean()
         loss_entropy_continuous = torch.masked_select(
             - self.cfg.training.actor_critic.entropy_continuous_weight * entropy_cont[..., ACTION_C_LOCK_MASK],
             mask_paddings.unsqueeze(-1)).mean()
-        loss_values = torch.square(values - lambda_returns)
+        loss_values = torch.square(values[:, :-1] - lambda_returns)
         loss_values_masked = torch.masked_select(update_weight * loss_values, mask_paddings).mean()
         # todo
         full_loss = LossWithIntermediateLosses(loss_actions=loss_actions_masked,
@@ -756,15 +737,27 @@ class ACTrainer:
         return epoch
 
 
+def custom_setup(cfg):
+    torch.backends.cudnn.benchmark = True
+    if sys.gettrace() is not None:  # if debugging
+        cfg.wandb.mode = "offline"
+        cfg.training.actor_critic.batch_num_samples = 2
+    cfg.wandb.tags = list(set(cfg.wandb.tags or [] + ["collection"]))
+    wandb.init(config=OmegaConf.to_container(cfg, resolve=True),
+               reinit=True,
+               resume=True,
+               **cfg.wandb)
+
+
 @hydra.main(config_path=r"C:\Users\Michael\PycharmProjects\Brawl_iris\config", config_name="trainer")
 def main(cfg: DictConfig):
     # todo: add motion attention mask (easier architecture)
     #       predict next frame (more signal density)
     #       remove value normalization (batchnorm is fine)
     #       debug midway actor converge
+    #       input average of frames between actions instead of a single screenshot
 
-    if sys.gettrace() is not None:  # if debugging
-        cfg.wandb.mode = "offline"
+    custom_setup(cfg)
 
     start_epoch = 1
     env: GymEnv = instantiate(cfg.env.train)
@@ -788,16 +781,27 @@ def main(cfg: DictConfig):
     Path("checkpoints/dataset").mkdir(parents=True, exist_ok=True)
 
     ac_trainer = ACTrainer(cfg, env, actor, optimizer, dataset)
-
-    shutil.copytree(
-        Path(
-            r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\cleaner_rewards\2024-04-04_00-07-51\checkpoints\dataset"),
-        Path("checkpoints\dataset"), dirs_exist_ok=True, )
+    # # TODO ATTENTION REMOVE
+    # # used for random collection based on tokens
+    # ac_trainer.batch_size = 99999
+    #
+    # def sample_from_random_token(*args, **kwargs):
+    #     t = np.random.randint(0, env.action_space.n)
+    #     return (torch.tensor(env.split_into_bins(t)).to(device)[None],
+    #             torch.zeros((3,)).float().to(device)[None])
+    #
+    # ac_trainer.actor.sample_actions = sample_from_random_token
+    # # TODO ATTENTION REMOVE (end)
+    # shutil.copytree(
+    #     Path(
+    #         r"C:\Users\Michael\PycharmProjects\Brawl_iris\input_artifacts\dataset"),
+    #     Path("checkpoints\dataset"), dirs_exist_ok=True, )
+    total_batch_size = cfg.training.actor_critic.batch_num_samples * cfg.training.actor_critic.grad_acc_steps
     # for f in Path("checkpoints\dataset").glob("*"):
-    #     if f.stem.isnumeric() and int(f.stem) > 200:
+    #     if f.stem.isnumeric() and int(f.stem) < 1627:
     #         f.unlink()
-
     # ac_trainer.dataset.load_disk_checkpoint(Path("checkpoints/dataset"))
+
     # start_epoch = ac_trainer.load_checkpoint(
     #     r"C:\Users\Michael\PycharmProjects\Brawl-Stars-AI\outputs\smaller_discounts\2024-04-21_20-41-57\checkpoints",
     #     dataset=False)
@@ -839,11 +843,11 @@ def main(cfg: DictConfig):
             ac_trainer.episode_end(collection=not do_replay, do_step=do_step)
 
         if do_log:
-            wandb.log({"epoch": n_episode, **ac_trainer.metrics})
+            wandb.log({**ac_trainer.metrics})
 
     while ac_trainer.batch_size > len(ac_trainer.dataset):
         print("collecting", len(ac_trainer.dataset), ac_trainer.batch_size)
-        collect_one()
+        collect_one(do_log=True)
         ac_trainer.save_checkpoint(start_epoch)  # save collected
     ac_trainer.save_checkpoint(start_epoch)  # make checkpoint for collection process
 
@@ -882,7 +886,7 @@ def main(cfg: DictConfig):
                     time.sleep(1)
 
             print('Saving checkpoint')
-            if (n_episode + 1) % 100 == 0:
+            if (n_episode + 1) % 200 == 0:
                 shutil.copytree('checkpoints', f'checkpoints/checkpoint_{n_episode}',
                                 ignore=shutil.ignore_patterns("dataset*", "checkpoint*"))
             ac_trainer.save_checkpoint(n_episode, dataset=False)

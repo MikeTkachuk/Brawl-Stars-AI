@@ -3,8 +3,6 @@ import tkinter as tk
 import numpy as np
 import torch
 
-from utils.misc import create_token
-
 
 class Main:
     def __init__(self, master: tk.Tk):
@@ -24,10 +22,7 @@ class Main:
     def update_stats(self, env, ac_trainer):
         self.step_variables[0].set(f"{ac_trainer.outputs[-1].means_values[0].item():.3f}")
         action = ac_trainer.actions[-1][0].cpu().detach()
-        action_logits = ac_trainer.outputs[-1].logits_actions[0].flatten().detach().cpu().numpy()
-        action_token = create_token(action[:-3].int().numpy().flatten(),
-                                    anchors=env.move_shot_anchors)
-        parsed = env.parse_action_token([action_token] + torch.sigmoid(action[-3:]).numpy().tolist())
+        parsed = env.parse_action_token([action[0]] + torch.sigmoid(action[-3:]).numpy().tolist())
 
         def _get_angle(vec):
             angle = np.arccos(vec[0]) * np.sign(vec[1])
@@ -36,16 +31,13 @@ class Main:
                 angle = 360 + angle
             return float(angle)
 
-        def _sigmoid(x):
-            return float(1 / (1 + np.exp(-x)))
-
-        self.step_variables[1].set(f"{parsed['make_move']} | {_sigmoid(action_logits[0]):.2f} | {action_logits[0]:.2f}")
+        self.step_variables[1].set(f"{parsed['make_move']}")
         self.step_variables[2].set(f"{_get_angle(parsed['direction']):.2f}")
-        self.step_variables[3].set(f"{parsed['make_shot']} | {_sigmoid(action_logits[1]):.2f} | {action_logits[1]:.2f}")
+        self.step_variables[3].set(f"{parsed['make_shot']}")
         self.step_variables[4].set(f"{_get_angle(parsed['shoot_direction']):.2f}")
         self.step_variables[5].set(f'{parsed["shoot_strength"]:.2f}')
-        self.step_variables[6].set(f'{parsed["super_ability"]} | {_sigmoid(action_logits[2]):.2f} | {action_logits[2]:.2f}')
-        self.step_variables[7].set(f'{parsed["use_gadget"]} | {_sigmoid(action_logits[3]):.2f} | {action_logits[3]:.2f}')
+        self.step_variables[6].set(f'{parsed["super_ability"]}')
+        self.step_variables[7].set(f'{parsed["use_gadget"]}')
 
         self.master.update_idletasks()
 

@@ -1,28 +1,6 @@
 import numpy as np
 
 
-def create_token(inp, n_binary=4, anchors=(4,4)):
-    """
-    :param inp: Warning: does not accept torch tensors.
-     array-like that holds [make_move, make_shot, super_ability, use_gadget, move_anchor, shot_anchor]
-    """
-    assert len(inp) == n_binary + len(anchors)
-    bin_str = ''
-    for i in range(n_binary):
-        bin_str += str(inp[i])
-
-    full_size = len(bin(anchors[0]-1))-2
-    anch_bin = bin(inp[-2])[2:]
-    bin_str += '0' * (full_size - len(anch_bin)) + anch_bin
-
-    full_size = len(bin(anchors[1]-1))-2
-    anch_bin = bin(inp[-1])[2:]
-    bin_str += '0' * (full_size - len(anch_bin)) + anch_bin
-
-    assert len(bin_str) == len(bin(2**n_binary*anchors[0]*anchors[1])) - 3, "Incorrect token range"
-    return int(bin_str, 2)
-
-
 class ActionTokenizer:
     def __init__(self, n_binary_actions=3, move_shot_anchors=(4, 4)):
         self.n_binary_actions = n_binary_actions
